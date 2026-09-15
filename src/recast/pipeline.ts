@@ -30,7 +30,8 @@ export async function runSinglePass(
   pass: RecastPass,
   textToTransform: string,
   chatId: string,
-  targetMessageId?: string
+  targetMessageId?: string,
+  userId?: string
 ): Promise<string> {
   if (!pass.enabled) return textToTransform;
 
@@ -42,16 +43,16 @@ export async function runSinglePass(
     try {
       let charId: string | null = null;
       if (chatId && sp?.chats?.get) {
-        const chat = await sp.chats.get(chatId);
+        const chat = await sp.chats.get(chatId, userId);
         charId = chat?.characterId || chat?.character_id || null;
       }
       if (!charId && sp?.chats?.getActive) {
-        const activeChat = await sp.chats.getActive();
+        const activeChat = await sp.chats.getActive(userId);
         charId = activeChat?.characterId || activeChat?.character_id || null;
       }
 
       if (charId) {
-        const char = await sp.characters.get(charId);
+        const char = await sp.characters.get(charId, userId);
         if (char) {
           const lines = [
             char.name ? `<name>${char.name}</name>` : '',
@@ -105,10 +106,11 @@ export async function runSinglePass(
     try {
       let wbText = '';
       if (sp.world_books.list) {
-        const books = await sp.world_books.list();
-        if (Array.isArray(books) && books.length > 0) {
+        const books = await sp.world_books.list(userId ? { userId } : undefined);
+        const bookList = Array.isArray(books) ? books : books?.data || [];
+        if (bookList.length > 0) {
           // Check for attached world books or active books
-          const firstBook = await sp.world_books.get(books[0].id);
+          const firstBook = await sp.world_books.get(bookList[0].id, userId);
           if (firstBook && Array.isArray(firstBook.entries)) {
             const snippet = firstBook.entries
               .filter((e: any) => e.enabled !== false)
@@ -149,10 +151,12 @@ export async function runSinglePass(
 
   // 5. Execute LLM Call via Spindle
   const genPayload: any = {
+    type: 'raw',
     messages,
     parameters: {
       temperature: 0.3
-    }
+    },
+    ...(userId ? { userId } : {})
   };
 
   if (pass.connection) {
@@ -179,10 +183,11 @@ export async function runRecastPipeline(
     messageId: string;
     rawText: string;
     settings: RecastSettings;
+    userId?: string;
     onProgress?: (progress: RecastProgress) => void;
   }
 ): Promise<RecastDiffData | null> {
-  const { chatId, messageId, rawText, settings, onProgress } = options;
+  const { chatId, messageId, rawText, settings, userId, onProgress } = options;
 
   if (!rawText || rawText.trim().length === 0) return null;
 
@@ -211,7 +216,7 @@ export async function runRecastPipeline(
     });
 
     try {
-      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId);
+      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId);
       currentText = passOutput;
       snapshots.push(currentText);
     } catch (err: any) {

@@ -15,10 +15,10 @@ function slugify(text: string): string {
 /**
  * List all available world books from Lumiverse Spindle
  */
-export async function listAvailableWorldBooks(spindle: any): Promise<WorldBookOption[]> {
+export async function listAvailableWorldBooks(spindle: any, userId?: string): Promise<WorldBookOption[]> {
   try {
     if (spindle?.world_books?.list) {
-      const result = await spindle.world_books.list();
+      const result = await spindle.world_books.list(userId ? { userId } : undefined);
       const list = Array.isArray(result) ? result : result?.data || [];
       return list.map((wb: any) => ({
         id: wb.id,
@@ -38,14 +38,15 @@ export async function listAvailableWorldBooks(spindle: any): Promise<WorldBookOp
  */
 export async function createOrSyncRecursionWorldBook(
   spindle: any,
-  activeCharacterId?: string | null
+  activeCharacterId?: string | null,
+  userId?: string
 ): Promise<{ worldBookId: string; createdCount: number }> {
   if (!spindle?.world_books) {
     throw new Error('Spindle world_books API is not available (check permissions in spindle.json)');
   }
 
   // 1. Check if the book already exists
-  const existingBooks = await listAvailableWorldBooks(spindle);
+  const existingBooks = await listAvailableWorldBooks(spindle, userId);
   let book = existingBooks.find(
     (b) => b.name === DEFAULT_WORLDBOOK_NAME || b.name === 'Recursion Cards'
   );
@@ -56,7 +57,7 @@ export async function createOrSyncRecursionWorldBook(
     const created = await spindle.world_books.create({
       name: DEFAULT_WORLDBOOK_NAME,
       description: 'Scene reasoning card definitions for Lumi:REcursion extension'
-    });
+    }, userId);
     worldBookId = created.id;
     console.log(`[Lumi:REcursion] Created new World Book: "${DEFAULT_WORLDBOOK_NAME}" (${worldBookId})`);
   } else {
@@ -66,7 +67,7 @@ export async function createOrSyncRecursionWorldBook(
   // 2. Fetch existing entries
   let existingEntries: any[] = [];
   try {
-    const entriesRes = await spindle.world_books.entries.list(worldBookId);
+    const entriesRes = await spindle.world_books.entries.list(worldBookId, userId ? { userId } : undefined);
     existingEntries = Array.isArray(entriesRes) ? entriesRes : entriesRes?.data || [];
   } catch (err) {
     console.warn('[Lumi:REcursion] Could not list entries:', err);
@@ -103,7 +104,7 @@ export async function createOrSyncRecursionWorldBook(
     };
 
     try {
-      await spindle.world_books.entries.create(worldBookId, entryData);
+      await spindle.world_books.entries.create(worldBookId, entryData, userId);
       createdCount++;
     } catch (err) {
       console.error(`[Lumi:REcursion] Failed to create entry for ${entry.family}:`, err);
@@ -113,12 +114,12 @@ export async function createOrSyncRecursionWorldBook(
   // 4. Attach to active character if provided
   if (activeCharacterId && spindle.characters?.get && spindle.characters?.update) {
     try {
-      const char = await spindle.characters.get(activeCharacterId);
+      const char = await spindle.characters.get(activeCharacterId, userId);
       if (char) {
         const wbIds = Array.isArray(char.world_book_ids) ? [...char.world_book_ids] : [];
         if (!wbIds.includes(worldBookId)) {
           wbIds.push(worldBookId);
-          await spindle.characters.update(activeCharacterId, { world_book_ids: wbIds });
+          await spindle.characters.update(activeCharacterId, { world_book_ids: wbIds }, userId);
           console.log(`[Lumi:REcursion] Attached World Book ${worldBookId} to character ${char.name}`);
         }
       }
@@ -135,14 +136,15 @@ export async function createOrSyncRecursionWorldBook(
  */
 export async function readCardsFromWorldBook(
   spindle: any,
-  worldBookId: string
+  worldBookId: string,
+  userId?: string
 ): Promise<CardDefinition[]> {
   if (!spindle?.world_books?.entries?.list || !worldBookId) {
     return [];
   }
 
   try {
-    const res = await spindle.world_books.entries.list(worldBookId);
+    const res = await spindle.world_books.entries.list(worldBookId, userId ? { userId } : undefined);
     const entries = Array.isArray(res) ? res : res?.data || [];
     const cards: CardDefinition[] = [];
 
@@ -222,11 +224,12 @@ export interface WorldBookCardEntryView {
 
 export async function listWorldBookCardEntries(
   spindle: any,
-  worldBookId: string
+  worldBookId: string,
+  userId?: string
 ): Promise<WorldBookCardEntryView[]> {
   if (!spindle?.world_books?.entries?.list || !worldBookId) return [];
   try {
-    const res = await spindle.world_books.entries.list(worldBookId);
+    const res = await spindle.world_books.entries.list(worldBookId, userId ? { userId } : undefined);
     const entries = Array.isArray(res) ? res : res?.data || [];
     return entries.map((entry: any) => {
       let parsed: any = null;
@@ -273,7 +276,8 @@ export async function saveWorldBookEntry(
     subItems?: string[];
     keys?: string[];
     disabled?: boolean;
-  }
+  },
+  userId?: string
 ): Promise<void> {
   if (!spindle?.world_books?.entries) throw new Error('World books entries API unavailable');
 
@@ -307,21 +311,22 @@ export async function saveWorldBookEntry(
   };
 
   if (entryData.id) {
-    await spindle.world_books.entries.update(entryData.id, entryPayload);
+    await spindle.world_books.entries.update(entryData.id, entryPayload, userId);
   } else {
-    await spindle.world_books.entries.create(worldBookId, entryPayload);
+    await spindle.world_books.entries.create(worldBookId, entryPayload, userId);
   }
 }
 
-export async function deleteWorldBookEntry(spindle: any, entryId: string): Promise<void> {
+export async function deleteWorldBookEntry(spindle: any, entryId: string, userId?: string): Promise<void> {
   if (!spindle?.world_books?.entries?.delete) throw new Error('World books delete API unavailable');
-  await spindle.world_books.entries.delete(entryId);
+  await spindle.world_books.entries.delete(entryId, userId);
 }
 
 export async function importWorldBookCards(
   spindle: any,
   worldBookId: string,
-  cards: any[]
+  cards: any[],
+  userId?: string
 ): Promise<number> {
   if (!Array.isArray(cards) || cards.length === 0) return 0;
   let count = 0;
@@ -336,7 +341,7 @@ export async function importWorldBookCards(
       subItems: Array.isArray(c.subItems) ? c.subItems : [],
       keys: Array.isArray(c.key || c.keys) ? (c.key || c.keys) : undefined,
       disabled: Boolean(c.disabled)
-    });
+    }, userId);
     count++;
   }
   return count;

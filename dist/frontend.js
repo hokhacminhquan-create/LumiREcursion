@@ -904,7 +904,12 @@ function renderRecastPanel(container, state) {
   runNowBtn.innerHTML = `<span>✨ Recast Latest Message</span>`;
   runNowBtn.title = "Run the full Recast pipeline on the latest assistant message now";
   runNowBtn.onclick = () => {
-    hostCtx?.sendToBackend({ type: "RECAST_RUN_MESSAGE" });
+    const activeChat = hostCtx?.getActiveChat?.();
+    const chatId = activeChat?.chatId || activeChat?.id || undefined;
+    hostCtx?.sendToBackend({
+      type: "RECAST_RUN_MESSAGE",
+      chatId
+    });
   };
   barRight.appendChild(runNowBtn);
   bar.appendChild(barRight);

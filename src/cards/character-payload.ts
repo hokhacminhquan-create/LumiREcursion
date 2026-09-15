@@ -43,12 +43,13 @@ export function createDefaultCharacterCards(): CharacterPayloadCard[] {
  */
 export async function getCharacterPayloadStatus(
   spindle: any,
-  characterId: string
+  characterId: string,
+  userId?: string
 ): Promise<CharacterPayloadStatus | null> {
   if (!spindle?.characters?.get || !characterId) return null;
 
   try {
-    const char = await spindle.characters.get(characterId);
+    const char = await spindle.characters.get(characterId, userId);
     if (!char) return null;
 
     const ext = char.extensions || {};
@@ -73,13 +74,14 @@ export async function getCharacterPayloadStatus(
  */
 export async function initCharacterCardPayload(
   spindle: any,
-  characterId: string
+  characterId: string,
+  userId?: string
 ): Promise<{ success: boolean; cardCount: number }> {
   if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) {
     throw new Error('Spindle characters API is not available or no active character.');
   }
 
-  const char = await spindle.characters.get(characterId);
+  const char = await spindle.characters.get(characterId, userId);
   if (!char) {
     throw new Error(`Character ${characterId} not found.`);
   }
@@ -100,7 +102,7 @@ export async function initCharacterCardPayload(
 
   await spindle.characters.update(characterId, {
     extensions: currentExtensions
-  });
+  }, userId);
 
   console.log(`[Lumi:REcursion] Initialized character extension payload on "${char.name}" with ${defaultCards.length} cards.`);
   return { success: true, cardCount: defaultCards.length };
@@ -111,12 +113,13 @@ export async function initCharacterCardPayload(
  */
 export async function readCardsFromCharacter(
   spindle: any,
-  characterId: string
+  characterId: string,
+  userId?: string
 ): Promise<CardDefinition[]> {
   if (!spindle?.characters?.get || !characterId) return [];
 
   try {
-    const char = await spindle.characters.get(characterId);
+    const char = await spindle.characters.get(characterId, userId);
     if (!char || !char.extensions) return [];
 
     const ext = char.extensions;
@@ -157,12 +160,13 @@ export async function updateCharacterCardState(
   spindle: any,
   characterId: string,
   cardId: string,
-  state: CardSelectionState
+  state: CardSelectionState,
+  userId?: string
 ): Promise<boolean> {
   if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) return false;
 
   try {
-    const char = await spindle.characters.get(characterId);
+    const char = await spindle.characters.get(characterId, userId);
     if (!char || !char.extensions) return false;
 
     const currentExt = { ...char.extensions };
@@ -173,7 +177,7 @@ export async function updateCharacterCardState(
     const found = payload.cards.find((c: any) => c.id === normalizedId || c.role === normalizedId);
     if (found) {
       found.selectionState = state;
-      await spindle.characters.update(characterId, { extensions: currentExt });
+      await spindle.characters.update(characterId, { extensions: currentExt }, userId);
       return true;
     }
     return false;
@@ -186,11 +190,12 @@ export async function updateCharacterCardState(
 export async function saveCharacterCard(
   spindle: any,
   characterId: string,
-  card: CharacterPayloadCard
+  card: CharacterPayloadCard,
+  userId?: string
 ): Promise<boolean> {
   if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) return false;
   try {
-    const char = await spindle.characters.get(characterId);
+    const char = await spindle.characters.get(characterId, userId);
     if (!char) return false;
 
     const currentExt = { ...(char.extensions || {}) };
@@ -227,7 +232,7 @@ export async function saveCharacterCard(
     currentExt[CHARACTER_EXT_KEY] = payload;
     currentExt['lumirecursion_card_defs'] = payload.cards;
 
-    await spindle.characters.update(characterId, { extensions: currentExt });
+    await spindle.characters.update(characterId, { extensions: currentExt }, userId);
     return true;
   } catch (err) {
     console.error('[Lumi:REcursion] Failed to save character card:', err);
@@ -238,11 +243,12 @@ export async function saveCharacterCard(
 export async function deleteCharacterCard(
   spindle: any,
   characterId: string,
-  cardId: string
+  cardId: string,
+  userId?: string
 ): Promise<boolean> {
   if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) return false;
   try {
-    const char = await spindle.characters.get(characterId);
+    const char = await spindle.characters.get(characterId, userId);
     if (!char || !char.extensions) return false;
 
     const currentExt = { ...char.extensions };
@@ -254,7 +260,7 @@ export async function deleteCharacterCard(
     currentExt[CHARACTER_EXT_KEY] = payload;
     currentExt['lumirecursion_card_defs'] = payload.cards;
 
-    await spindle.characters.update(characterId, { extensions: currentExt });
+    await spindle.characters.update(characterId, { extensions: currentExt }, userId);
     return true;
   } catch (err) {
     console.error('[Lumi:REcursion] Failed to delete character card:', err);
@@ -265,13 +271,14 @@ export async function deleteCharacterCard(
 export async function importCharacterPayload(
   spindle: any,
   characterId: string,
-  importedData: any
+  importedData: any,
+  userId?: string
 ): Promise<{ success: boolean; cardCount: number }> {
   if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) {
     throw new Error('Characters API unavailable');
   }
 
-  const char = await spindle.characters.get(characterId);
+  const char = await spindle.characters.get(characterId, userId);
   if (!char) throw new Error(`Character ${characterId} not found`);
 
   let rawCards: any[] = [];
@@ -314,6 +321,6 @@ export async function importCharacterPayload(
   currentExt[CHARACTER_EXT_KEY] = payload;
   currentExt['lumirecursion_card_defs'] = cleanCards;
 
-  await spindle.characters.update(characterId, { extensions: currentExt });
+  await spindle.characters.update(characterId, { extensions: currentExt }, userId);
   return { success: true, cardCount: cleanCards.length };
 }

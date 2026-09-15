@@ -94,6 +94,26 @@ let cachedTurn: CachedTurn | null = null;
 
 let storage: StorageManager;
 
+// ─── User Session Tracking (Operator-Scoped Spindle Support) ──────────────────
+let activeUserId: string | null = null;
+const chatUserMap = new Map<string, string>();
+
+export function rememberUser(userId?: string | null, chatId?: string | null) {
+  if (userId && typeof userId === 'string' && userId.trim()) {
+    activeUserId = userId.trim();
+    if (chatId) chatUserMap.set(chatId, activeUserId);
+  } else if (chatId && chatUserMap.has(chatId)) {
+    activeUserId = chatUserMap.get(chatId)!;
+  }
+}
+
+export function getEffectiveUserId(chatId?: string | null): string | undefined {
+  if (chatId && chatUserMap.has(chatId)) {
+    return chatUserMap.get(chatId);
+  }
+  return activeUserId || undefined;
+}
+
 // ─── Helper Functions ────────────────────────────────────────────────────────
 
 function simpleHash(str: string): string {
@@ -113,10 +133,11 @@ function broadcastProgress(progress: RunProgressState) {
   }
 }
 
-async function listConnections(): Promise<Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }>> {
+async function listConnections(userId?: string): Promise<Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }>> {
   try {
     if (sp?.connections?.list) {
-      const list = await sp.connections.list();
+      const uId = userId || getEffectiveUserId();
+      const list = await sp.connections.list(uId);
       if (Array.isArray(list)) {
         return list.map((c: any) => ({
           id: c.id,
@@ -133,17 +154,18 @@ async function listConnections(): Promise<Array<{ id: string; name: string; prov
   return [];
 }
 
-async function resolveConnectionId(profileId: string): Promise<string | undefined> {
+async function resolveConnectionId(profileId: string, userId?: string): Promise<string | undefined> {
   if (profileId) return profileId;
-  const conns = await listConnections();
+  const conns = await listConnections(userId);
   const def = conns.find((c) => c.is_default) || conns[0];
   return def ? def.id : undefined;
 }
 
-async function getActiveCharacterId(): Promise<string | null> {
+async function getActiveCharacterId(userId?: string): Promise<string | null> {
   try {
     if (sp?.chats?.getActive) {
-      const chat = await sp.chats.getActive();
+      const uId = userId || getEffectiveUserId();
+      const chat = await sp.chats.getActive(uId);
       return chat?.characterId || chat?.character_id || null;
     }
   } catch {}
@@ -159,6 +181,9 @@ async function getActiveCharacterId(): Promise<string | null> {
 async function resolveTurnCards(
   context: any
 ): Promise<{ selectedCards: CardDefinition[]; omittedCards: CardOmission[] }> {
+  const uId = context?.userId || getEffectiveUserId(context?.chatId);
+  rememberUser(context?.userId, context?.chatId);
+
   let candidateCards: CardDefinition[] = [];
 
   // ── Option A: World Book Mode ──
@@ -166,9 +191,9 @@ async function resolveTurnCards(
     let wbId = settings.worldBookId;
     if (!wbId && context?.characterId && sp?.characters?.get) {
       try {
-        const char = await sp.characters.get(context.characterId);
+        const char = await sp.characters.get(context.characterId, uId);
         if (char && Array.isArray(char.world_book_ids)) {
-          const wbs = await listAvailableWorldBooks(sp);
+          const wbs = await listAvailableWorldBooks(sp, uId);
           const matched = wbs.find(
             (w) =>
               char.world_book_ids.includes(w.id) &&
@@ -179,7 +204,7 @@ async function resolveTurnCards(
       } catch {}
     }
     if (!wbId) {
-      const wbs = await listAvailableWorldBooks(sp);
+      const wbs = await listAvailableWorldBooks(sp, uId);
       const matched = wbs.find(
         (w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name.includes('Recursion Cards')
       );
@@ -187,7 +212,7 @@ async function resolveTurnCards(
     }
 
     if (wbId) {
-      candidateCards = await readCardsFromWorldBook(sp, wbId);
+      candidateCards = await readCardsFromWorldBook(sp, wbId, uId);
       console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from World Book (${wbId})`);
     }
   }
@@ -195,11 +220,11 @@ async function resolveTurnCards(
   else if (settings.cardSourceMode === 'character_ext') {
     let charId = context?.characterId;
     if (!charId) {
-      charId = await getActiveCharacterId();
+      charId = await getActiveCharacterId(uId);
     }
 
     if (charId) {
-      candidateCards = await readCardsFromCharacter(sp, charId);
+      candidateCards = await readCardsFromCharacter(sp, charId, uId);
       console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from Character Payload (${charId})`);
     }
   }
@@ -267,11 +292,13 @@ async function resolveTurnCards(
 
       isRecastRunning = true;
       try {
+        const uId = getEffectiveUserId(payload.chatId);
         const diff = await runRecastPipeline(sp, {
           chatId: payload.chatId,
           messageId: payload.messageId,
           rawText: payload.content,
           settings: recastSettings,
+          userId: uId,
           onProgress: (prog) => {
             recastProgress = prog;
             sp.sendToFrontend?.({ type: 'RECAST_PROGRESS', progress: prog });
@@ -388,7 +415,8 @@ async function resolveTurnCards(
 
       // ── Execute Reasoning Pipeline ──
       const runId = `run-${Date.now()}`;
-      const connId = await resolveConnectionId(settings.connectionProfileId);
+      const turnUserId = context?.userId || getEffectiveUserId(context?.chatId);
+      const connId = await resolveConnectionId(settings.connectionProfileId, turnUserId);
 
       // Initialize pixel indicators to 'running' (cyan)
       const initialPixels: HeroPixelItem[] = selectedCards.map((c) => ({
@@ -427,6 +455,7 @@ async function resolveTurnCards(
               messages: [{ role: 'user', content: prompt }],
               connection_id: connId,
               parameters: { temperature: 0.25, max_tokens: 280 },
+              ...(turnUserId ? { userId: turnUserId } : {}),
               signal: combinedSignal
             })) as { content?: string };
 
@@ -508,6 +537,7 @@ async function resolveTurnCards(
             messages: [{ role: 'user', content: prompt }],
             connection_id: connId,
             parameters: { temperature: 0.25, max_tokens: 1200 },
+            ...(turnUserId ? { userId: turnUserId } : {}),
             signal: combinedSignal
           })) as { content?: string };
 
@@ -613,18 +643,21 @@ async function resolveTurnCards(
   );
 
   // ── 2. IPC Message Dispatcher ──────────────────────────────────────────────
-  sp.onFrontendMessage(async (msg: FrontendToBackendMessage) => {
+  sp.onFrontendMessage(async (msg: FrontendToBackendMessage, userId?: string) => {
+    rememberUser(userId, (msg as any).chatId);
+    const effectiveUserId = userId || getEffectiveUserId((msg as any).chatId);
+
     switch (msg.type) {
       case 'GET_STATE': {
-        const conns = await listConnections();
-        const wbs = await listAvailableWorldBooks(sp);
-        const activeCharId = await getActiveCharacterId();
-        const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId) : null;
+        const conns = await listConnections(effectiveUserId);
+        const wbs = await listAvailableWorldBooks(sp, effectiveUserId);
+        const activeCharId = await getActiveCharacterId(effectiveUserId);
+        const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId, effectiveUserId) : null;
 
         let wbCards: any[] = [];
         const effectiveWbId = settings.worldBookId || wbs.find((w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name === 'Recursion Cards')?.id;
         if (effectiveWbId) {
-          wbCards = await listWorldBookCardEntries(sp, effectiveWbId);
+          wbCards = await listWorldBookCardEntries(sp, effectiveWbId, effectiveUserId);
         }
 
         sp.sendToFrontend({
@@ -653,14 +686,14 @@ async function resolveTurnCards(
 
       case 'CREATE_OR_SYNC_WORLD_BOOK': {
         try {
-          const activeCharId = await getActiveCharacterId();
-          const result = await createOrSyncRecursionWorldBook(sp, activeCharId);
+          const activeCharId = await getActiveCharacterId(effectiveUserId);
+          const result = await createOrSyncRecursionWorldBook(sp, activeCharId, effectiveUserId);
           settings.worldBookId = result.worldBookId;
           settings.cardSourceMode = 'world_book';
           await storage.saveSettings(settings);
 
-          const wbs = await listAvailableWorldBooks(sp);
-          const cards = await listWorldBookCardEntries(sp, result.worldBookId);
+          const wbs = await listAvailableWorldBooks(sp, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, result.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: 'WORLD_BOOKS_UPDATED', worldBooks: wbs, selectedId: result.worldBookId });
           sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: result.worldBookId, cards });
           sp.sendToFrontend({ type: 'SETTINGS_UPDATED', settings });
@@ -673,16 +706,16 @@ async function resolveTurnCards(
 
       case 'INIT_CHARACTER_PAYLOAD': {
         try {
-          const activeCharId = await getActiveCharacterId();
+          const activeCharId = await getActiveCharacterId(effectiveUserId);
           if (!activeCharId) {
             sp.toast?.warn?.('No active character selected in chat.');
             break;
           }
-          const res = await initCharacterCardPayload(sp, activeCharId);
+          const res = await initCharacterCardPayload(sp, activeCharId, effectiveUserId);
           settings.cardSourceMode = 'character_ext';
           await storage.saveSettings(settings);
 
-          const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+          const charStatus = await getCharacterPayloadStatus(sp, activeCharId, effectiveUserId);
           sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status: charStatus });
           sp.sendToFrontend({ type: 'SETTINGS_UPDATED', settings });
           sp.toast?.success?.(`👤 Initialized ${res.cardCount} cards in character extension payload!`);
@@ -694,10 +727,10 @@ async function resolveTurnCards(
 
       case 'UPDATE_CHARACTER_CARD_STATE': {
         try {
-          const activeCharId = await getActiveCharacterId();
+          const activeCharId = await getActiveCharacterId(effectiveUserId);
           if (activeCharId) {
-            await updateCharacterCardState(sp, activeCharId, msg.cardId, msg.state);
-            const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+            await updateCharacterCardState(sp, activeCharId, msg.cardId, msg.state, effectiveUserId);
+            const charStatus = await getCharacterPayloadStatus(sp, activeCharId, effectiveUserId);
             sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status: charStatus });
           }
         } catch (err: any) {
@@ -800,7 +833,7 @@ async function resolveTurnCards(
       }
 
       case 'GET_CONNECTIONS': {
-        const conns = await listConnections();
+        const conns = await listConnections(effectiveUserId);
         sp.sendToFrontend({ type: 'CONNECTIONS', connections: conns });
         break;
       }
@@ -878,7 +911,7 @@ async function resolveTurnCards(
           let targetText = '';
 
           if (!targetChatId && sp.chats?.getActive) {
-            const activeChat = await sp.chats.getActive();
+            const activeChat = await sp.chats.getActive(effectiveUserId);
             targetChatId = activeChat?.id;
           }
 
@@ -912,6 +945,7 @@ async function resolveTurnCards(
             messageId: targetMessageId,
             rawText: targetText,
             settings: recastSettings,
+            userId: effectiveUserId,
             onProgress: (prog) => {
               recastProgress = prog;
               sp.sendToFrontend?.({ type: 'RECAST_PROGRESS', progress: prog });
@@ -969,15 +1003,15 @@ async function resolveTurnCards(
 
       // ── World Book Card Management IPC ────────────────────────────────────
       case 'GET_WORLDBOOK_CARDS': {
-        const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+        const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
         sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
         break;
       }
 
       case 'SAVE_WORLDBOOK_CARD': {
         try {
-          await saveWorldBookEntry(sp, msg.worldBookId, msg.entry);
-          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          await saveWorldBookEntry(sp, msg.worldBookId, msg.entry, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
           sp.toast?.success?.(`💾 Card "${msg.entry.family}" saved to World Book`);
         } catch (err: any) {
@@ -988,8 +1022,8 @@ async function resolveTurnCards(
 
       case 'DELETE_WORLDBOOK_CARD': {
         try {
-          await deleteWorldBookEntry(sp, msg.entryId);
-          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          await deleteWorldBookEntry(sp, msg.entryId, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
           sp.toast?.info?.('🗑️ Card entry removed from World Book');
         } catch (err: any) {
@@ -1000,8 +1034,8 @@ async function resolveTurnCards(
 
       case 'IMPORT_WORLDBOOK_CARDS': {
         try {
-          const count = await importWorldBookCards(sp, msg.worldBookId, msg.cards);
-          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          const count = await importWorldBookCards(sp, msg.worldBookId, msg.cards, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
           sp.toast?.success?.(`📥 Imported ${count} card entries into World Book!`);
         } catch (err: any) {
@@ -1013,8 +1047,8 @@ async function resolveTurnCards(
       // ── Character Payload Card Management IPC ────────────────────────────
       case 'SAVE_CHARACTER_CARD': {
         try {
-          await saveCharacterCard(sp, msg.characterId, msg.card);
-          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          await saveCharacterCard(sp, msg.characterId, msg.card, effectiveUserId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId, effectiveUserId);
           sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status });
           sp.toast?.success?.(`💾 Card "${msg.card.name}" saved to character payload`);
         } catch (err: any) {
@@ -1025,8 +1059,8 @@ async function resolveTurnCards(
 
       case 'DELETE_CHARACTER_CARD': {
         try {
-          await deleteCharacterCard(sp, msg.characterId, msg.cardId);
-          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          await deleteCharacterCard(sp, msg.characterId, msg.cardId, effectiveUserId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId, effectiveUserId);
           sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status });
           sp.toast?.info?.('🗑️ Card removed from character payload');
         } catch (err: any) {
@@ -1037,8 +1071,8 @@ async function resolveTurnCards(
 
       case 'IMPORT_CHARACTER_PAYLOAD': {
         try {
-          const res = await importCharacterPayload(sp, msg.characterId, msg.payload);
-          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          const res = await importCharacterPayload(sp, msg.characterId, msg.payload, effectiveUserId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId, effectiveUserId);
           sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status });
           sp.toast?.success?.(`📥 Imported ${res.cardCount} cards into character payload!`);
         } catch (err: any) {

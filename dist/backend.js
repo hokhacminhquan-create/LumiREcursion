@@ -733,10 +733,10 @@ var DEFAULT_WORLDBOOK_NAME = "Lumi:REcursion Cards";
 function slugify2(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
-async function listAvailableWorldBooks(spindle2) {
+async function listAvailableWorldBooks(spindle2, userId) {
   try {
     if (spindle2?.world_books?.list) {
-      const result = await spindle2.world_books.list();
+      const result = await spindle2.world_books.list(userId ? { userId } : undefined);
       const list = Array.isArray(result) ? result : result?.data || [];
       return list.map((wb) => ({
         id: wb.id,
@@ -749,18 +749,18 @@ async function listAvailableWorldBooks(spindle2) {
   }
   return [];
 }
-async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId) {
+async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId, userId) {
   if (!spindle2?.world_books) {
     throw new Error("Spindle world_books API is not available (check permissions in spindle.json)");
   }
-  const existingBooks = await listAvailableWorldBooks(spindle2);
+  const existingBooks = await listAvailableWorldBooks(spindle2, userId);
   let book = existingBooks.find((b) => b.name === DEFAULT_WORLDBOOK_NAME || b.name === "Recursion Cards");
   let worldBookId;
   if (!book) {
     const created = await spindle2.world_books.create({
       name: DEFAULT_WORLDBOOK_NAME,
       description: "Scene reasoning card definitions for Lumi:REcursion extension"
-    });
+    }, userId);
     worldBookId = created.id;
     console.log(`[Lumi:REcursion] Created new World Book: "${DEFAULT_WORLDBOOK_NAME}" (${worldBookId})`);
   } else {
@@ -768,7 +768,7 @@ async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId) {
   }
   let existingEntries = [];
   try {
-    const entriesRes = await spindle2.world_books.entries.list(worldBookId);
+    const entriesRes = await spindle2.world_books.entries.list(worldBookId, userId ? { userId } : undefined);
     existingEntries = Array.isArray(entriesRes) ? entriesRes : entriesRes?.data || [];
   } catch (err) {
     console.warn("[Lumi:REcursion] Could not list entries:", err);
@@ -797,7 +797,7 @@ async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId) {
       priority: entry.priority
     };
     try {
-      await spindle2.world_books.entries.create(worldBookId, entryData);
+      await spindle2.world_books.entries.create(worldBookId, entryData, userId);
       createdCount++;
     } catch (err) {
       console.error(`[Lumi:REcursion] Failed to create entry for ${entry.family}:`, err);
@@ -805,12 +805,12 @@ async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId) {
   }
   if (activeCharacterId && spindle2.characters?.get && spindle2.characters?.update) {
     try {
-      const char = await spindle2.characters.get(activeCharacterId);
+      const char = await spindle2.characters.get(activeCharacterId, userId);
       if (char) {
         const wbIds = Array.isArray(char.world_book_ids) ? [...char.world_book_ids] : [];
         if (!wbIds.includes(worldBookId)) {
           wbIds.push(worldBookId);
-          await spindle2.characters.update(activeCharacterId, { world_book_ids: wbIds });
+          await spindle2.characters.update(activeCharacterId, { world_book_ids: wbIds }, userId);
           console.log(`[Lumi:REcursion] Attached World Book ${worldBookId} to character ${char.name}`);
         }
       }
@@ -820,12 +820,12 @@ async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId) {
   }
   return { worldBookId, createdCount };
 }
-async function readCardsFromWorldBook(spindle2, worldBookId) {
+async function readCardsFromWorldBook(spindle2, worldBookId, userId) {
   if (!spindle2?.world_books?.entries?.list || !worldBookId) {
     return [];
   }
   try {
-    const res = await spindle2.world_books.entries.list(worldBookId);
+    const res = await spindle2.world_books.entries.list(worldBookId, userId ? { userId } : undefined);
     const entries = Array.isArray(res) ? res : res?.data || [];
     const cards = [];
     for (const entry of entries) {
@@ -876,11 +876,11 @@ function parsePlainTextCardEntry(entry) {
     priority: entry.priority || 80
   };
 }
-async function listWorldBookCardEntries(spindle2, worldBookId) {
+async function listWorldBookCardEntries(spindle2, worldBookId, userId) {
   if (!spindle2?.world_books?.entries?.list || !worldBookId)
     return [];
   try {
-    const res = await spindle2.world_books.entries.list(worldBookId);
+    const res = await spindle2.world_books.entries.list(worldBookId, userId ? { userId } : undefined);
     const entries = Array.isArray(res) ? res : res?.data || [];
     return entries.map((entry) => {
       let parsed = null;
@@ -909,7 +909,7 @@ async function listWorldBookCardEntries(spindle2, worldBookId) {
     return [];
   }
 }
-async function saveWorldBookEntry(spindle2, worldBookId, entryData) {
+async function saveWorldBookEntry(spindle2, worldBookId, entryData, userId) {
   if (!spindle2?.world_books?.entries)
     throw new Error("World books entries API unavailable");
   const familyName = entryData.family.trim();
@@ -936,17 +936,17 @@ async function saveWorldBookEntry(spindle2, worldBookId, entryData) {
     priority
   };
   if (entryData.id) {
-    await spindle2.world_books.entries.update(entryData.id, entryPayload);
+    await spindle2.world_books.entries.update(entryData.id, entryPayload, userId);
   } else {
-    await spindle2.world_books.entries.create(worldBookId, entryPayload);
+    await spindle2.world_books.entries.create(worldBookId, entryPayload, userId);
   }
 }
-async function deleteWorldBookEntry(spindle2, entryId) {
+async function deleteWorldBookEntry(spindle2, entryId, userId) {
   if (!spindle2?.world_books?.entries?.delete)
     throw new Error("World books delete API unavailable");
-  await spindle2.world_books.entries.delete(entryId);
+  await spindle2.world_books.entries.delete(entryId, userId);
 }
-async function importWorldBookCards(spindle2, worldBookId, cards) {
+async function importWorldBookCards(spindle2, worldBookId, cards, userId) {
   if (!Array.isArray(cards) || cards.length === 0)
     return 0;
   let count = 0;
@@ -961,7 +961,7 @@ async function importWorldBookCards(spindle2, worldBookId, cards) {
       subItems: Array.isArray(c.subItems) ? c.subItems : [],
       keys: Array.isArray(c.key || c.keys) ? c.key || c.keys : undefined,
       disabled: Boolean(c.disabled)
-    });
+    }, userId);
     count++;
   }
   return count;
@@ -985,11 +985,11 @@ function createDefaultCharacterCards() {
     subItems: entry.subItems.map((s) => `${s.key}: ${s.description}`)
   }));
 }
-async function getCharacterPayloadStatus(spindle2, characterId) {
+async function getCharacterPayloadStatus(spindle2, characterId, userId) {
   if (!spindle2?.characters?.get || !characterId)
     return null;
   try {
-    const char = await spindle2.characters.get(characterId);
+    const char = await spindle2.characters.get(characterId, userId);
     if (!char)
       return null;
     const ext = char.extensions || {};
@@ -1007,11 +1007,11 @@ async function getCharacterPayloadStatus(spindle2, characterId) {
     return null;
   }
 }
-async function initCharacterCardPayload(spindle2, characterId) {
+async function initCharacterCardPayload(spindle2, characterId, userId) {
   if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId) {
     throw new Error("Spindle characters API is not available or no active character.");
   }
-  const char = await spindle2.characters.get(characterId);
+  const char = await spindle2.characters.get(characterId, userId);
   if (!char) {
     throw new Error(`Character ${characterId} not found.`);
   }
@@ -1027,15 +1027,15 @@ async function initCharacterCardPayload(spindle2, characterId) {
   currentExtensions["lumirecursion_card_defs"] = defaultCards;
   await spindle2.characters.update(characterId, {
     extensions: currentExtensions
-  });
+  }, userId);
   console.log(`[Lumi:REcursion] Initialized character extension payload on "${char.name}" with ${defaultCards.length} cards.`);
   return { success: true, cardCount: defaultCards.length };
 }
-async function readCardsFromCharacter(spindle2, characterId) {
+async function readCardsFromCharacter(spindle2, characterId, userId) {
   if (!spindle2?.characters?.get || !characterId)
     return [];
   try {
-    const char = await spindle2.characters.get(characterId);
+    const char = await spindle2.characters.get(characterId, userId);
     if (!char || !char.extensions)
       return [];
     const ext = char.extensions;
@@ -1063,11 +1063,11 @@ async function readCardsFromCharacter(spindle2, characterId) {
     return [];
   }
 }
-async function updateCharacterCardState(spindle2, characterId, cardId, state) {
+async function updateCharacterCardState(spindle2, characterId, cardId, state, userId) {
   if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId)
     return false;
   try {
-    const char = await spindle2.characters.get(characterId);
+    const char = await spindle2.characters.get(characterId, userId);
     if (!char || !char.extensions)
       return false;
     const currentExt = { ...char.extensions };
@@ -1078,7 +1078,7 @@ async function updateCharacterCardState(spindle2, characterId, cardId, state) {
     const found = payload.cards.find((c) => c.id === normalizedId || c.role === normalizedId);
     if (found) {
       found.selectionState = state;
-      await spindle2.characters.update(characterId, { extensions: currentExt });
+      await spindle2.characters.update(characterId, { extensions: currentExt }, userId);
       return true;
     }
     return false;
@@ -1087,11 +1087,11 @@ async function updateCharacterCardState(spindle2, characterId, cardId, state) {
     return false;
   }
 }
-async function saveCharacterCard(spindle2, characterId, card) {
+async function saveCharacterCard(spindle2, characterId, card, userId) {
   if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId)
     return false;
   try {
-    const char = await spindle2.characters.get(characterId);
+    const char = await spindle2.characters.get(characterId, userId);
     if (!char)
       return false;
     const currentExt = { ...char.extensions || {} };
@@ -1124,18 +1124,18 @@ async function saveCharacterCard(spindle2, characterId, card) {
     }
     currentExt[CHARACTER_EXT_KEY] = payload;
     currentExt["lumirecursion_card_defs"] = payload.cards;
-    await spindle2.characters.update(characterId, { extensions: currentExt });
+    await spindle2.characters.update(characterId, { extensions: currentExt }, userId);
     return true;
   } catch (err) {
     console.error("[Lumi:REcursion] Failed to save character card:", err);
     return false;
   }
 }
-async function deleteCharacterCard(spindle2, characterId, cardId) {
+async function deleteCharacterCard(spindle2, characterId, cardId, userId) {
   if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId)
     return false;
   try {
-    const char = await spindle2.characters.get(characterId);
+    const char = await spindle2.characters.get(characterId, userId);
     if (!char || !char.extensions)
       return false;
     const currentExt = { ...char.extensions };
@@ -1146,18 +1146,18 @@ async function deleteCharacterCard(spindle2, characterId, cardId) {
     payload.cards = payload.cards.filter((c) => c.id !== normalizedId && c.role !== normalizedId);
     currentExt[CHARACTER_EXT_KEY] = payload;
     currentExt["lumirecursion_card_defs"] = payload.cards;
-    await spindle2.characters.update(characterId, { extensions: currentExt });
+    await spindle2.characters.update(characterId, { extensions: currentExt }, userId);
     return true;
   } catch (err) {
     console.error("[Lumi:REcursion] Failed to delete character card:", err);
     return false;
   }
 }
-async function importCharacterPayload(spindle2, characterId, importedData) {
+async function importCharacterPayload(spindle2, characterId, importedData, userId) {
   if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId) {
     throw new Error("Characters API unavailable");
   }
-  const char = await spindle2.characters.get(characterId);
+  const char = await spindle2.characters.get(characterId, userId);
   if (!char)
     throw new Error(`Character ${characterId} not found`);
   let rawCards = [];
@@ -1195,7 +1195,7 @@ async function importCharacterPayload(spindle2, characterId, importedData) {
   };
   currentExt[CHARACTER_EXT_KEY] = payload;
   currentExt["lumirecursion_card_defs"] = cleanCards;
-  await spindle2.characters.update(characterId, { extensions: currentExt });
+  await spindle2.characters.update(characterId, { extensions: currentExt }, userId);
   return { success: true, cardCount: cleanCards.length };
 }
 
@@ -1214,7 +1214,7 @@ function cleanModelOutput(text) {
   }
   return cleaned;
 }
-async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId) {
+async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId) {
   if (!pass.enabled)
     return textToTransform;
   let systemPrompt = pass.prompt.trim();
@@ -1223,15 +1223,15 @@ async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId)
     try {
       let charId = null;
       if (chatId && sp?.chats?.get) {
-        const chat = await sp.chats.get(chatId);
+        const chat = await sp.chats.get(chatId, userId);
         charId = chat?.characterId || chat?.character_id || null;
       }
       if (!charId && sp?.chats?.getActive) {
-        const activeChat = await sp.chats.getActive();
+        const activeChat = await sp.chats.getActive(userId);
         charId = activeChat?.characterId || activeChat?.character_id || null;
       }
       if (charId) {
-        const char = await sp.characters.get(charId);
+        const char = await sp.characters.get(charId, userId);
         if (char) {
           const lines = [
             char.name ? `<name>${char.name}</name>` : "",
@@ -1287,9 +1287,10 @@ ${lines.join(`
     try {
       let wbText = "";
       if (sp.world_books.list) {
-        const books = await sp.world_books.list();
-        if (Array.isArray(books) && books.length > 0) {
-          const firstBook = await sp.world_books.get(books[0].id);
+        const books = await sp.world_books.list(userId ? { userId } : undefined);
+        const bookList = Array.isArray(books) ? books : books?.data || [];
+        if (bookList.length > 0) {
+          const firstBook = await sp.world_books.get(bookList[0].id, userId);
           if (firstBook && Array.isArray(firstBook.entries)) {
             const snippet = firstBook.entries.filter((e) => e.enabled !== false).slice(0, 5).map((e) => `[${e.keys?.join(", ") || "Entry"}]: ${e.content}`).join(`
 `);
@@ -1331,10 +1332,12 @@ ${textToTransform}
     });
   }
   const genPayload = {
+    type: "raw",
     messages,
     parameters: {
       temperature: 0.3
-    }
+    },
+    ...userId ? { userId } : {}
   };
   if (pass.connection) {
     genPayload.connection_id = pass.connection;
@@ -1350,7 +1353,7 @@ ${textToTransform}
   return cleaned && cleaned.length > 0 ? cleaned : textToTransform;
 }
 async function runRecastPipeline(sp, options) {
-  const { chatId, messageId, rawText, settings, onProgress } = options;
+  const { chatId, messageId, rawText, settings, userId, onProgress } = options;
   if (!rawText || rawText.trim().length === 0)
     return null;
   const activePreset = settings.presets.find((p) => p.id === settings.activePresetId) || settings.presets[0];
@@ -1374,7 +1377,7 @@ async function runRecastPipeline(sp, options) {
       statusText: `Running pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`
     });
     try {
-      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId);
+      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId);
       currentText = passOutput;
       snapshots.push(currentText);
     } catch (err) {
@@ -1419,6 +1422,23 @@ var recastProgress = null;
 var isRecastRunning = false;
 var cachedTurn = null;
 var storage;
+var activeUserId = null;
+var chatUserMap = new Map;
+function rememberUser(userId, chatId) {
+  if (userId && typeof userId === "string" && userId.trim()) {
+    activeUserId = userId.trim();
+    if (chatId)
+      chatUserMap.set(chatId, activeUserId);
+  } else if (chatId && chatUserMap.has(chatId)) {
+    activeUserId = chatUserMap.get(chatId);
+  }
+}
+function getEffectiveUserId(chatId) {
+  if (chatId && chatUserMap.has(chatId)) {
+    return chatUserMap.get(chatId);
+  }
+  return activeUserId || undefined;
+}
 function simpleHash(str) {
   let hash = 0;
   for (let i = 0;i < str.length; i++) {
@@ -1434,10 +1454,11 @@ function broadcastProgress(progress) {
     sp.sendToFrontend({ type: "PROGRESS", progress });
   }
 }
-async function listConnections() {
+async function listConnections(userId) {
   try {
     if (sp?.connections?.list) {
-      const list = await sp.connections.list();
+      const uId = userId || getEffectiveUserId();
+      const list = await sp.connections.list(uId);
       if (Array.isArray(list)) {
         return list.map((c) => ({
           id: c.id,
@@ -1453,31 +1474,34 @@ async function listConnections() {
   }
   return [];
 }
-async function resolveConnectionId(profileId) {
+async function resolveConnectionId(profileId, userId) {
   if (profileId)
     return profileId;
-  const conns = await listConnections();
+  const conns = await listConnections(userId);
   const def = conns.find((c) => c.is_default) || conns[0];
   return def ? def.id : undefined;
 }
-async function getActiveCharacterId() {
+async function getActiveCharacterId(userId) {
   try {
     if (sp?.chats?.getActive) {
-      const chat = await sp.chats.getActive();
+      const uId = userId || getEffectiveUserId();
+      const chat = await sp.chats.getActive(uId);
       return chat?.characterId || chat?.character_id || null;
     }
   } catch {}
   return null;
 }
 async function resolveTurnCards(context) {
+  const uId = context?.userId || getEffectiveUserId(context?.chatId);
+  rememberUser(context?.userId, context?.chatId);
   let candidateCards = [];
   if (settings.cardSourceMode === "world_book") {
     let wbId = settings.worldBookId;
     if (!wbId && context?.characterId && sp?.characters?.get) {
       try {
-        const char = await sp.characters.get(context.characterId);
+        const char = await sp.characters.get(context.characterId, uId);
         if (char && Array.isArray(char.world_book_ids)) {
-          const wbs = await listAvailableWorldBooks(sp);
+          const wbs = await listAvailableWorldBooks(sp, uId);
           const matched = wbs.find((w) => char.world_book_ids.includes(w.id) && (w.name.includes("Recursion") || w.name.includes("Lumi:REcursion")));
           if (matched)
             wbId = matched.id;
@@ -1485,22 +1509,22 @@ async function resolveTurnCards(context) {
       } catch {}
     }
     if (!wbId) {
-      const wbs = await listAvailableWorldBooks(sp);
+      const wbs = await listAvailableWorldBooks(sp, uId);
       const matched = wbs.find((w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name.includes("Recursion Cards"));
       if (matched)
         wbId = matched.id;
     }
     if (wbId) {
-      candidateCards = await readCardsFromWorldBook(sp, wbId);
+      candidateCards = await readCardsFromWorldBook(sp, wbId, uId);
       console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from World Book (${wbId})`);
     }
   } else if (settings.cardSourceMode === "character_ext") {
     let charId = context?.characterId;
     if (!charId) {
-      charId = await getActiveCharacterId();
+      charId = await getActiveCharacterId(uId);
     }
     if (charId) {
-      candidateCards = await readCardsFromCharacter(sp, charId);
+      candidateCards = await readCardsFromCharacter(sp, charId, uId);
       console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from Character Payload (${charId})`);
     }
   }
@@ -1548,11 +1572,13 @@ async function resolveTurnCards(context) {
         return;
       isRecastRunning = true;
       try {
+        const uId = getEffectiveUserId(payload.chatId);
         const diff = await runRecastPipeline(sp, {
           chatId: payload.chatId,
           messageId: payload.messageId,
           rawText: payload.content,
           settings: recastSettings,
+          userId: uId,
           onProgress: (prog) => {
             recastProgress = prog;
             sp.sendToFrontend?.({ type: "RECAST_PROGRESS", progress: prog });
@@ -1650,7 +1676,8 @@ async function resolveTurnCards(context) {
       };
     }
     const runId = `run-${Date.now()}`;
-    const connId = await resolveConnectionId(settings.connectionProfileId);
+    const turnUserId = context?.userId || getEffectiveUserId(context?.chatId);
+    const connId = await resolveConnectionId(settings.connectionProfileId, turnUserId);
     const initialPixels = selectedCards.map((c) => ({
       id: c.id,
       name: c.name,
@@ -1679,6 +1706,7 @@ async function resolveTurnCards(context) {
             messages: [{ role: "user", content: prompt }],
             connection_id: connId,
             parameters: { temperature: 0.25, max_tokens: 280 },
+            ...turnUserId ? { userId: turnUserId } : {},
             signal: combinedSignal
           });
           clearTimeout(timeoutId);
@@ -1741,6 +1769,7 @@ async function resolveTurnCards(context) {
           messages: [{ role: "user", content: prompt }],
           connection_id: connId,
           parameters: { temperature: 0.25, max_tokens: 1200 },
+          ...turnUserId ? { userId: turnUserId } : {},
           signal: combinedSignal
         });
         clearTimeout(timeoutId);
@@ -1823,17 +1852,19 @@ async function resolveTurnCards(context) {
       ]
     };
   });
-  sp.onFrontendMessage(async (msg) => {
+  sp.onFrontendMessage(async (msg, userId) => {
+    rememberUser(userId, msg.chatId);
+    const effectiveUserId = userId || getEffectiveUserId(msg.chatId);
     switch (msg.type) {
       case "GET_STATE": {
-        const conns = await listConnections();
-        const wbs = await listAvailableWorldBooks(sp);
-        const activeCharId = await getActiveCharacterId();
-        const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId) : null;
+        const conns = await listConnections(effectiveUserId);
+        const wbs = await listAvailableWorldBooks(sp, effectiveUserId);
+        const activeCharId = await getActiveCharacterId(effectiveUserId);
+        const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId, effectiveUserId) : null;
         let wbCards = [];
         const effectiveWbId = settings.worldBookId || wbs.find((w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name === "Recursion Cards")?.id;
         if (effectiveWbId) {
-          wbCards = await listWorldBookCardEntries(sp, effectiveWbId);
+          wbCards = await listWorldBookCardEntries(sp, effectiveWbId, effectiveUserId);
         }
         sp.sendToFrontend({
           type: "STATE",
@@ -1859,13 +1890,13 @@ async function resolveTurnCards(context) {
       }
       case "CREATE_OR_SYNC_WORLD_BOOK": {
         try {
-          const activeCharId = await getActiveCharacterId();
-          const result = await createOrSyncRecursionWorldBook(sp, activeCharId);
+          const activeCharId = await getActiveCharacterId(effectiveUserId);
+          const result = await createOrSyncRecursionWorldBook(sp, activeCharId, effectiveUserId);
           settings.worldBookId = result.worldBookId;
           settings.cardSourceMode = "world_book";
           await storage.saveSettings(settings);
-          const wbs = await listAvailableWorldBooks(sp);
-          const cards = await listWorldBookCardEntries(sp, result.worldBookId);
+          const wbs = await listAvailableWorldBooks(sp, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, result.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: "WORLD_BOOKS_UPDATED", worldBooks: wbs, selectedId: result.worldBookId });
           sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: result.worldBookId, cards });
           sp.sendToFrontend({ type: "SETTINGS_UPDATED", settings });
@@ -1877,15 +1908,15 @@ async function resolveTurnCards(context) {
       }
       case "INIT_CHARACTER_PAYLOAD": {
         try {
-          const activeCharId = await getActiveCharacterId();
+          const activeCharId = await getActiveCharacterId(effectiveUserId);
           if (!activeCharId) {
             sp.toast?.warn?.("No active character selected in chat.");
             break;
           }
-          const res = await initCharacterCardPayload(sp, activeCharId);
+          const res = await initCharacterCardPayload(sp, activeCharId, effectiveUserId);
           settings.cardSourceMode = "character_ext";
           await storage.saveSettings(settings);
-          const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+          const charStatus = await getCharacterPayloadStatus(sp, activeCharId, effectiveUserId);
           sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status: charStatus });
           sp.sendToFrontend({ type: "SETTINGS_UPDATED", settings });
           sp.toast?.success?.(`\uD83D\uDC64 Initialized ${res.cardCount} cards in character extension payload!`);
@@ -1896,10 +1927,10 @@ async function resolveTurnCards(context) {
       }
       case "UPDATE_CHARACTER_CARD_STATE": {
         try {
-          const activeCharId = await getActiveCharacterId();
+          const activeCharId = await getActiveCharacterId(effectiveUserId);
           if (activeCharId) {
-            await updateCharacterCardState(sp, activeCharId, msg.cardId, msg.state);
-            const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+            await updateCharacterCardState(sp, activeCharId, msg.cardId, msg.state, effectiveUserId);
+            const charStatus = await getCharacterPayloadStatus(sp, activeCharId, effectiveUserId);
             sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status: charStatus });
           }
         } catch (err) {
@@ -1989,7 +2020,7 @@ async function resolveTurnCards(context) {
         break;
       }
       case "GET_CONNECTIONS": {
-        const conns = await listConnections();
+        const conns = await listConnections(effectiveUserId);
         sp.sendToFrontend({ type: "CONNECTIONS", connections: conns });
         break;
       }
@@ -2059,7 +2090,7 @@ async function resolveTurnCards(context) {
           let targetMessageId = msg.messageId;
           let targetText = "";
           if (!targetChatId && sp.chats?.getActive) {
-            const activeChat = await sp.chats.getActive();
+            const activeChat = await sp.chats.getActive(effectiveUserId);
             targetChatId = activeChat?.id;
           }
           if (targetChatId && !targetMessageId && sp.chat?.getMessages) {
@@ -2090,6 +2121,7 @@ async function resolveTurnCards(context) {
             messageId: targetMessageId,
             rawText: targetText,
             settings: recastSettings,
+            userId: effectiveUserId,
             onProgress: (prog) => {
               recastProgress = prog;
               sp.sendToFrontend?.({ type: "RECAST_PROGRESS", progress: prog });
@@ -2140,14 +2172,14 @@ async function resolveTurnCards(context) {
         break;
       }
       case "GET_WORLDBOOK_CARDS": {
-        const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+        const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
         sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
         break;
       }
       case "SAVE_WORLDBOOK_CARD": {
         try {
-          await saveWorldBookEntry(sp, msg.worldBookId, msg.entry);
-          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          await saveWorldBookEntry(sp, msg.worldBookId, msg.entry, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
           sp.toast?.success?.(`\uD83D\uDCBE Card "${msg.entry.family}" saved to World Book`);
         } catch (err) {
@@ -2157,8 +2189,8 @@ async function resolveTurnCards(context) {
       }
       case "DELETE_WORLDBOOK_CARD": {
         try {
-          await deleteWorldBookEntry(sp, msg.entryId);
-          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          await deleteWorldBookEntry(sp, msg.entryId, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
           sp.toast?.info?.("\uD83D\uDDD1\uFE0F Card entry removed from World Book");
         } catch (err) {
@@ -2168,8 +2200,8 @@ async function resolveTurnCards(context) {
       }
       case "IMPORT_WORLDBOOK_CARDS": {
         try {
-          const count = await importWorldBookCards(sp, msg.worldBookId, msg.cards);
-          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          const count = await importWorldBookCards(sp, msg.worldBookId, msg.cards, effectiveUserId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId, effectiveUserId);
           sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
           sp.toast?.success?.(`\uD83D\uDCE5 Imported ${count} card entries into World Book!`);
         } catch (err) {
@@ -2179,8 +2211,8 @@ async function resolveTurnCards(context) {
       }
       case "SAVE_CHARACTER_CARD": {
         try {
-          await saveCharacterCard(sp, msg.characterId, msg.card);
-          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          await saveCharacterCard(sp, msg.characterId, msg.card, effectiveUserId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId, effectiveUserId);
           sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status });
           sp.toast?.success?.(`\uD83D\uDCBE Card "${msg.card.name}" saved to character payload`);
         } catch (err) {
@@ -2190,8 +2222,8 @@ async function resolveTurnCards(context) {
       }
       case "DELETE_CHARACTER_CARD": {
         try {
-          await deleteCharacterCard(sp, msg.characterId, msg.cardId);
-          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          await deleteCharacterCard(sp, msg.characterId, msg.cardId, effectiveUserId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId, effectiveUserId);
           sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status });
           sp.toast?.info?.("\uD83D\uDDD1\uFE0F Card removed from character payload");
         } catch (err) {
@@ -2201,8 +2233,8 @@ async function resolveTurnCards(context) {
       }
       case "IMPORT_CHARACTER_PAYLOAD": {
         try {
-          const res = await importCharacterPayload(sp, msg.characterId, msg.payload);
-          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          const res = await importCharacterPayload(sp, msg.characterId, msg.payload, effectiveUserId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId, effectiveUserId);
           sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status });
           sp.toast?.success?.(`\uD83D\uDCE5 Imported ${res.cardCount} cards into character payload!`);
         } catch (err) {
@@ -2213,3 +2245,7 @@ async function resolveTurnCards(context) {
     }
   });
 })();
+export {
+  getEffectiveUserId,
+  rememberUser
+};
