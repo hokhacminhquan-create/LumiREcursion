@@ -35,13 +35,20 @@ import {
   listAvailableWorldBooks,
   createOrSyncRecursionWorldBook,
   readCardsFromWorldBook,
+  listWorldBookCardEntries,
+  saveWorldBookEntry,
+  deleteWorldBookEntry,
+  importWorldBookCards,
   DEFAULT_WORLDBOOK_NAME
 } from './cards/worldbook';
 import {
   getCharacterPayloadStatus,
   initCharacterCardPayload,
   readCardsFromCharacter,
-  updateCharacterCardState
+  updateCharacterCardState,
+  saveCharacterCard,
+  deleteCharacterCard,
+  importCharacterPayload
 } from './cards/character-payload';
 import {
   DEFAULT_RECAST_SETTINGS,
@@ -614,6 +621,12 @@ async function resolveTurnCards(
         const activeCharId = await getActiveCharacterId();
         const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId) : null;
 
+        let wbCards: any[] = [];
+        const effectiveWbId = settings.worldBookId || wbs.find((w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name === 'Recursion Cards')?.id;
+        if (effectiveWbId) {
+          wbCards = await listWorldBookCardEntries(sp, effectiveWbId);
+        }
+
         sp.sendToFrontend({
           type: 'STATE',
           settings,
@@ -624,6 +637,7 @@ async function resolveTurnCards(
           connections: conns,
           worldBooks: wbs,
           characterStatus: charStatus,
+          worldBookCards: wbCards,
           recastSettings,
           recastProgress
         });
@@ -646,7 +660,9 @@ async function resolveTurnCards(
           await storage.saveSettings(settings);
 
           const wbs = await listAvailableWorldBooks(sp);
+          const cards = await listWorldBookCardEntries(sp, result.worldBookId);
           sp.sendToFrontend({ type: 'WORLD_BOOKS_UPDATED', worldBooks: wbs, selectedId: result.worldBookId });
+          sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: result.worldBookId, cards });
           sp.sendToFrontend({ type: 'SETTINGS_UPDATED', settings });
           sp.toast?.success?.(`📖 World Book "${DEFAULT_WORLDBOOK_NAME}" synced with ${result.createdCount} card entries!`);
         } catch (err: any) {
@@ -947,6 +963,86 @@ async function resolveTurnCards(
         } catch (err: any) {
           console.error('[Lumi:REcursion:Recast] Failed to apply recast result:', err);
           sp.toast?.error?.(`Failed to apply recast: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      // ── World Book Card Management IPC ────────────────────────────────────
+      case 'GET_WORLDBOOK_CARDS': {
+        const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+        sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
+        break;
+      }
+
+      case 'SAVE_WORLDBOOK_CARD': {
+        try {
+          await saveWorldBookEntry(sp, msg.worldBookId, msg.entry);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
+          sp.toast?.success?.(`💾 Card "${msg.entry.family}" saved to World Book`);
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to save entry: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      case 'DELETE_WORLDBOOK_CARD': {
+        try {
+          await deleteWorldBookEntry(sp, msg.entryId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
+          sp.toast?.info?.('🗑️ Card entry removed from World Book');
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to delete entry: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      case 'IMPORT_WORLDBOOK_CARDS': {
+        try {
+          const count = await importWorldBookCards(sp, msg.worldBookId, msg.cards);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          sp.sendToFrontend({ type: 'WORLDBOOK_CARDS_UPDATED', worldBookId: msg.worldBookId, cards });
+          sp.toast?.success?.(`📥 Imported ${count} card entries into World Book!`);
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to import cards: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      // ── Character Payload Card Management IPC ────────────────────────────
+      case 'SAVE_CHARACTER_CARD': {
+        try {
+          await saveCharacterCard(sp, msg.characterId, msg.card);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status });
+          sp.toast?.success?.(`💾 Card "${msg.card.name}" saved to character payload`);
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to save card: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      case 'DELETE_CHARACTER_CARD': {
+        try {
+          await deleteCharacterCard(sp, msg.characterId, msg.cardId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status });
+          sp.toast?.info?.('🗑️ Card removed from character payload');
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to delete card: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      case 'IMPORT_CHARACTER_PAYLOAD': {
+        try {
+          const res = await importCharacterPayload(sp, msg.characterId, msg.payload);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status });
+          sp.toast?.success?.(`📥 Imported ${res.cardCount} cards into character payload!`);
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to import payload: ${err?.message || err}`);
         }
         break;
       }

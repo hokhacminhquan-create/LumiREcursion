@@ -182,3 +182,138 @@ export async function updateCharacterCardState(
     return false;
   }
 }
+
+export async function saveCharacterCard(
+  spindle: any,
+  characterId: string,
+  card: CharacterPayloadCard
+): Promise<boolean> {
+  if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) return false;
+  try {
+    const char = await spindle.characters.get(characterId);
+    if (!char) return false;
+
+    const currentExt = { ...(char.extensions || {}) };
+    let payload = currentExt[CHARACTER_EXT_KEY];
+    if (!payload || !Array.isArray(payload.cards)) {
+      payload = {
+        version: 1,
+        enabled: true,
+        pipeline: 'segmented',
+        cards: []
+      };
+    }
+
+    const cardId = card.id || card.role || slugify(card.name || 'card') + 'Card';
+    const cleanCard: CharacterPayloadCard = {
+      id: cardId,
+      family: card.family || card.name || 'Custom Scene Card',
+      name: card.name || card.family || 'Custom Scene Card',
+      role: card.role || cardId,
+      priority: typeof card.priority === 'number' ? card.priority : 80,
+      selectionState: card.selectionState || 'active',
+      description: card.description || '',
+      promptText: card.promptText || card.description || '',
+      subItems: Array.isArray(card.subItems) ? card.subItems : []
+    };
+
+    const idx = payload.cards.findIndex((c: any) => c.id === cardId || c.role === cardId);
+    if (idx !== -1) {
+      payload.cards[idx] = cleanCard;
+    } else {
+      payload.cards.push(cleanCard);
+    }
+
+    currentExt[CHARACTER_EXT_KEY] = payload;
+    currentExt['lumirecursion_card_defs'] = payload.cards;
+
+    await spindle.characters.update(characterId, { extensions: currentExt });
+    return true;
+  } catch (err) {
+    console.error('[Lumi:REcursion] Failed to save character card:', err);
+    return false;
+  }
+}
+
+export async function deleteCharacterCard(
+  spindle: any,
+  characterId: string,
+  cardId: string
+): Promise<boolean> {
+  if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) return false;
+  try {
+    const char = await spindle.characters.get(characterId);
+    if (!char || !char.extensions) return false;
+
+    const currentExt = { ...char.extensions };
+    const payload = currentExt[CHARACTER_EXT_KEY];
+    if (!payload || !Array.isArray(payload.cards)) return false;
+
+    const normalizedId = cardId.replace(/^char:/, '');
+    payload.cards = payload.cards.filter((c: any) => c.id !== normalizedId && c.role !== normalizedId);
+    currentExt[CHARACTER_EXT_KEY] = payload;
+    currentExt['lumirecursion_card_defs'] = payload.cards;
+
+    await spindle.characters.update(characterId, { extensions: currentExt });
+    return true;
+  } catch (err) {
+    console.error('[Lumi:REcursion] Failed to delete character card:', err);
+    return false;
+  }
+}
+
+export async function importCharacterPayload(
+  spindle: any,
+  characterId: string,
+  importedData: any
+): Promise<{ success: boolean; cardCount: number }> {
+  if (!spindle?.characters?.get || !spindle?.characters?.update || !characterId) {
+    throw new Error('Characters API unavailable');
+  }
+
+  const char = await spindle.characters.get(characterId);
+  if (!char) throw new Error(`Character ${characterId} not found`);
+
+  let rawCards: any[] = [];
+  if (Array.isArray(importedData)) {
+    rawCards = importedData;
+  } else if (importedData && Array.isArray(importedData.cards)) {
+    rawCards = importedData.cards;
+  } else if (importedData && typeof importedData === 'object') {
+    rawCards = importedData.card_defs || importedData.lumi_recursion?.cards || [];
+  }
+
+  if (rawCards.length === 0) {
+    throw new Error('No valid cards found in imported JSON data.');
+  }
+
+  const cleanCards: CharacterPayloadCard[] = rawCards.map((c: any, i: number) => {
+    const family = c.family || c.name || `Card ${i + 1}`;
+    const role = c.role || c.id || slugify(family) + 'Card';
+    return {
+      id: role,
+      family,
+      name: c.name || family,
+      role,
+      priority: typeof c.priority === 'number' ? c.priority : 80,
+      selectionState: c.selectionState || 'active',
+      description: c.description || c.promptText || '',
+      promptText: c.promptText || c.description || '',
+      subItems: Array.isArray(c.subItems) ? c.subItems : []
+    };
+  });
+
+  const currentExt = { ...(char.extensions || {}) };
+  const payload: CharacterExtensionData = {
+    version: 1,
+    enabled: true,
+    pipeline: 'segmented',
+    cards: cleanCards
+  };
+
+  currentExt[CHARACTER_EXT_KEY] = payload;
+  currentExt['lumirecursion_card_defs'] = cleanCards;
+
+  await spindle.characters.update(characterId, { extensions: currentExt });
+  return { success: true, cardCount: cleanCards.length };
+}

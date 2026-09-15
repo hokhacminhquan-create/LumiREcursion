@@ -207,3 +207,137 @@ function parsePlainTextCardEntry(entry: any): any {
     priority: entry.priority || 80
   };
 }
+
+export interface WorldBookCardEntryView {
+  id: string;
+  family: string;
+  role: string;
+  priority: number;
+  selectionState: CardSelectionState;
+  description: string;
+  subItems: string[];
+  keys: string[];
+  disabled: boolean;
+}
+
+export async function listWorldBookCardEntries(
+  spindle: any,
+  worldBookId: string
+): Promise<WorldBookCardEntryView[]> {
+  if (!spindle?.world_books?.entries?.list || !worldBookId) return [];
+  try {
+    const res = await spindle.world_books.entries.list(worldBookId);
+    const entries = Array.isArray(res) ? res : res?.data || [];
+    return entries.map((entry: any) => {
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(String(entry.content || ''));
+      } catch {
+        parsed = parsePlainTextCardEntry(entry);
+      }
+      const familyName = parsed?.family || entry.comment || 'Scene Card';
+      const roleName = parsed?.role || slugify(familyName) + 'Card';
+      const selectionState: CardSelectionState =
+        parsed?.selectionState === 'priority' || parsed?.selectionState === 'off'
+          ? parsed.selectionState
+          : 'active';
+
+      return {
+        id: entry.id,
+        family: familyName,
+        role: roleName,
+        priority: typeof parsed?.priority === 'number' ? parsed.priority : (entry.priority || 80),
+        selectionState,
+        description: parsed?.description || String(entry.content || ''),
+        subItems: Array.isArray(parsed?.subItems) ? parsed.subItems : [],
+        keys: Array.isArray(entry.key) ? entry.key : [String(entry.key || '')],
+        disabled: Boolean(entry.disabled)
+      };
+    });
+  } catch (err) {
+    console.warn(`[Lumi:REcursion] Failed to list card entries from World Book ${worldBookId}:`, err);
+    return [];
+  }
+}
+
+export async function saveWorldBookEntry(
+  spindle: any,
+  worldBookId: string,
+  entryData: {
+    id?: string;
+    family: string;
+    role?: string;
+    priority?: number;
+    selectionState?: CardSelectionState;
+    description: string;
+    subItems?: string[];
+    keys?: string[];
+    disabled?: boolean;
+  }
+): Promise<void> {
+  if (!spindle?.world_books?.entries) throw new Error('World books entries API unavailable');
+
+  const familyName = entryData.family.trim();
+  const roleName = entryData.role?.trim() || slugify(familyName) + 'Card';
+  const priority = typeof entryData.priority === 'number' ? entryData.priority : 80;
+  const selectionState = entryData.selectionState || 'active';
+  const subItems = Array.isArray(entryData.subItems) ? entryData.subItems : [];
+
+  const payload = {
+    family: familyName,
+    role: roleName,
+    priority,
+    selectionState,
+    description: entryData.description,
+    subItems
+  };
+
+  const keys = Array.isArray(entryData.keys) && entryData.keys.length > 0
+    ? entryData.keys
+    : [roleName, slugify(familyName), 'recursion_card'];
+
+  const entryPayload = {
+    comment: familyName,
+    key: keys,
+    content: JSON.stringify(payload, null, 2),
+    constant: true,
+    disabled: Boolean(entryData.disabled),
+    position: 0,
+    priority
+  };
+
+  if (entryData.id) {
+    await spindle.world_books.entries.update(entryData.id, entryPayload);
+  } else {
+    await spindle.world_books.entries.create(worldBookId, entryPayload);
+  }
+}
+
+export async function deleteWorldBookEntry(spindle: any, entryId: string): Promise<void> {
+  if (!spindle?.world_books?.entries?.delete) throw new Error('World books delete API unavailable');
+  await spindle.world_books.entries.delete(entryId);
+}
+
+export async function importWorldBookCards(
+  spindle: any,
+  worldBookId: string,
+  cards: any[]
+): Promise<number> {
+  if (!Array.isArray(cards) || cards.length === 0) return 0;
+  let count = 0;
+  for (const c of cards) {
+    const family = c.family || c.name || c.comment || 'Custom Scene Card';
+    await saveWorldBookEntry(spindle, worldBookId, {
+      family,
+      role: c.role || c.id || slugify(family) + 'Card',
+      priority: typeof c.priority === 'number' ? c.priority : 80,
+      selectionState: c.selectionState || 'active',
+      description: c.description || c.promptText || '',
+      subItems: Array.isArray(c.subItems) ? c.subItems : [],
+      keys: Array.isArray(c.key || c.keys) ? (c.key || c.keys) : undefined,
+      disabled: Boolean(c.disabled)
+    });
+    count++;
+  }
+  return count;
+}

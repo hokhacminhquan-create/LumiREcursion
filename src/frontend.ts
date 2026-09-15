@@ -17,6 +17,7 @@ import type {
   WorldBookOption,
   CharacterPayloadStatus,
   BackendToFrontendMessage,
+  WorldBookCardEntryView,
   RecastSettings,
   RecastProgress,
   RecastDiffData
@@ -26,6 +27,7 @@ import { DEFAULT_RECAST_SETTINGS } from './recast/defaults';
 import { RECAST_STYLES } from './recast/styles';
 import { renderRecastPanel } from './recast/recast-panel';
 import { showRecastDiffModal } from './recast/diff-modal';
+import { renderWorldBookPanel, renderCharacterPayloadPanel } from './cards/source-panels';
 
 // SVG Icons adhering to Recursion's technical graphite design
 const RECURSION_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12"/><path d="M12 6a6 6 0 0 1 6 6c0 3.314-2.686 6-6 6s-6-2.686-6-6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>`;
@@ -521,6 +523,7 @@ let activeCharacterStatus: CharacterPayloadStatus | null = null;
 let activeNavTab: 'reasoning' | 'recast' = 'reasoning';
 let currentRecastSettings: RecastSettings = { ...DEFAULT_RECAST_SETTINGS };
 let currentRecastProgress: RecastProgress | null = null;
+let currentWorldBookCards: WorldBookCardEntryView[] = [];
 
 const panelRoots = new Set<HTMLElement>();
 let inputBarActionHandle: any = null;
@@ -747,6 +750,9 @@ function renderMainPanel(root: HTMLElement) {
     btn.onclick = () => {
       currentSettings!.cardSourceMode = m.id;
       hostCtx?.sendToBackend({ type: 'UPDATE_SETTINGS', settings: { cardSourceMode: m.id } });
+      if (m.id === 'world_book' && currentSettings?.worldBookId) {
+        hostCtx?.sendToBackend({ type: 'GET_WORLDBOOK_CARDS', worldBookId: currentSettings.worldBookId });
+      }
       renderAllPanels();
     };
     sourceSegmentPanel.appendChild(btn);
@@ -755,149 +761,19 @@ function renderMainPanel(root: HTMLElement) {
 
   // 5. Source-Specific Management Panel
   if (currentSettings.cardSourceMode === 'world_book') {
-    // ── Option A: World Book Panel ──
-    const wbPanel = document.createElement('div');
-    wbPanel.className = 'lr-panel';
-
-    const wbHeader = document.createElement('div');
-    wbHeader.className = 'lr-panel-header';
-    wbHeader.innerHTML = `<span>📖 Option A: World Book Card Definitions</span>`;
-    wbPanel.appendChild(wbHeader);
-
-    const wbBody = document.createElement('div');
-    wbBody.className = 'lr-panel-body';
-
-    const infoBox = document.createElement('div');
-    infoBox.className = 'lr-info-box';
-    infoBox.innerHTML = `
-      🐭 <strong>World Book Mode:</strong> Cards are stored as native entries inside a Lumiverse World Book.
-      Both you and assistant personas (like Mousepad) can view, edit, enable/disable, or create new cards natively in the World Books manager.
-    `;
-    wbBody.appendChild(infoBox);
-
-    const selectRow = document.createElement('div');
-    selectRow.className = 'lr-deck-bar';
-
-    const wbSelect = document.createElement('select');
-    wbSelect.className = 'lr-select';
-    const defWbOpt = document.createElement('option');
-    defWbOpt.value = '';
-    defWbOpt.textContent = 'Auto-detect "Lumi:REcursion Cards" or attached book';
-    wbSelect.appendChild(defWbOpt);
-
-    for (const b of availableWorldBooks) {
-      const opt = document.createElement('option');
-      opt.value = b.id;
-      opt.textContent = `${b.name}${b.entryCount !== undefined ? ` (${b.entryCount} entries)` : ''}`;
-      opt.selected = b.id === currentSettings.worldBookId;
-      wbSelect.appendChild(opt);
-    }
-    wbSelect.onchange = () => {
-      currentSettings!.worldBookId = wbSelect.value;
-      hostCtx?.sendToBackend({ type: 'UPDATE_SETTINGS', settings: { worldBookId: wbSelect.value } });
-    };
-    selectRow.appendChild(wbSelect);
-
-    const syncBtn = document.createElement('button');
-    syncBtn.className = 'lr-btn lr-btn-primary';
-    syncBtn.innerHTML = `${SPARKLE_ICON_SVG} Sync / Create Book`;
-    syncBtn.title = 'Creates or updates the "Lumi:REcursion Cards" World Book with all 11 canonical card families and attaches to active character';
-    syncBtn.onclick = () => {
-      hostCtx?.sendToBackend({ type: 'CREATE_OR_SYNC_WORLD_BOOK' });
-    };
-    selectRow.appendChild(syncBtn);
-
-    wbBody.appendChild(selectRow);
-    wbPanel.appendChild(wbBody);
-    container.appendChild(wbPanel);
+    renderWorldBookPanel(container, {
+      worldBooks: availableWorldBooks,
+      selectedWorldBookId: currentSettings.worldBookId,
+      cards: currentWorldBookCards,
+      hostCtx,
+      onRefresh: renderAllPanels
+    });
   } else if (currentSettings.cardSourceMode === 'character_ext') {
-    // ── Option B: Character Extension Payload Panel ──
-    const charPanel = document.createElement('div');
-    charPanel.className = 'lr-panel';
-
-    const charHeader = document.createElement('div');
-    charHeader.className = 'lr-panel-header';
-    charHeader.innerHTML = `<span>👤 Option B: Character Card Payload</span>`;
-    charPanel.appendChild(charHeader);
-
-    const charBody = document.createElement('div');
-    charBody.className = 'lr-panel-body';
-
-    const infoBox = document.createElement('div');
-    infoBox.className = 'lr-info-box';
-    infoBox.innerHTML = `
-      🐭 <strong>Character Payload Mode:</strong> Cards are saved directly into <code>character.extensions.lumi_recursion</code>.
-      This binds the card set to the specific character card. Assistants in chat can inspect and edit cards via <code>set</code>.
-    `;
-    charBody.appendChild(infoBox);
-
-    if (activeCharacterStatus) {
-      const charBar = document.createElement('div');
-      charBar.className = 'lr-deck-bar';
-
-      const statusSpan = document.createElement('div');
-      statusSpan.style.flex = '1';
-      statusSpan.style.fontSize = '12px';
-      statusSpan.innerHTML = `Active: <strong>${activeCharacterStatus.name}</strong> · ${activeCharacterStatus.hasPayload ? `<span style="color:#7fcf8a">${activeCharacterStatus.cardCount} cards loaded</span>` : '<span style="color:#ffd479">No payload yet</span>'}`;
-      charBar.appendChild(statusSpan);
-
-      const initBtn = document.createElement('button');
-      initBtn.className = 'lr-btn lr-btn-primary';
-      initBtn.innerHTML = `${SPARKLE_ICON_SVG} Initialize / Reset Cards`;
-      initBtn.onclick = () => {
-        hostCtx?.sendToBackend({ type: 'INIT_CHARACTER_PAYLOAD' });
-      };
-      charBar.appendChild(initBtn);
-      charBody.appendChild(charBar);
-
-      // Render character cards if available
-      if (activeCharacterStatus.cards && activeCharacterStatus.cards.length > 0) {
-        const cardsDiv = document.createElement('div');
-        cardsDiv.className = 'lr-category-cards';
-        cardsDiv.style.border = '1px solid #333';
-        cardsDiv.style.borderRadius = '5px';
-
-        for (const card of activeCharacterStatus.cards) {
-          const row = document.createElement('div');
-          row.className = 'lr-card-row';
-
-          const info = document.createElement('div');
-          info.className = 'lr-card-info';
-          info.innerHTML = `
-            <div class="lr-card-name">${card.name || card.family}</div>
-            <div class="lr-card-desc">${card.description}</div>
-          `;
-          row.appendChild(info);
-
-          const pill = document.createElement('div');
-          pill.className = `lr-card-pill state-${card.selectionState}`;
-          pill.textContent = card.selectionState.toUpperCase();
-          pill.onclick = () => {
-            const next = cycleCardState(card.id, card.selectionState, currentSettings!.mode);
-            card.selectionState = next;
-            pill.className = `lr-card-pill state-${next}`;
-            pill.textContent = next.toUpperCase();
-            hostCtx?.sendToBackend({
-              type: 'UPDATE_CHARACTER_CARD_STATE',
-              cardId: card.id,
-              state: next
-            });
-          };
-          row.appendChild(pill);
-          cardsDiv.appendChild(row);
-        }
-        charBody.appendChild(cardsDiv);
-      }
-    } else {
-      const emptyDiv = document.createElement('div');
-      emptyDiv.style.color = '#888';
-      emptyDiv.style.padding = '8px 0';
-      emptyDiv.textContent = 'No active character selected in chat. Open a chat with a character to inspect or initialize their payload.';
-      charBody.appendChild(emptyDiv);
-    }
-
-    charPanel.appendChild(charBody);
-    container.appendChild(charPanel);
+    renderCharacterPayloadPanel(container, {
+      characterStatus: activeCharacterStatus,
+      hostCtx,
+      onRefresh: renderAllPanels
+    });
   } else {
     // ── Local Decks Mode Panel ──
     const activeDeck = currentDecks[currentActiveDeckId] || currentDecks[DEFAULT_DECK_ID];
@@ -1317,6 +1193,9 @@ export async function setup(ctx: any): Promise<() => void> {
         availableConnections = msg.connections || [];
         availableWorldBooks = msg.worldBooks || [];
         activeCharacterStatus = msg.characterStatus || null;
+        if (msg.worldBookCards) {
+          currentWorldBookCards = msg.worldBookCards;
+        }
         if (msg.recastSettings) {
           currentRecastSettings = msg.recastSettings;
         }
@@ -1363,6 +1242,12 @@ export async function setup(ctx: any): Promise<() => void> {
         if (currentSettings) {
           currentSettings.worldBookId = msg.selectedId;
         }
+        renderAllPanels();
+        break;
+      }
+
+      case 'WORLDBOOK_CARDS_UPDATED': {
+        currentWorldBookCards = msg.cards || [];
         renderAllPanels();
         break;
       }

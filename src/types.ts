@@ -177,8 +177,17 @@ export type FrontendToBackendMessage =
   | { type: 'MANUAL_RUN_NOW' }
   | { type: 'GET_CONNECTIONS' }
   | { type: 'CREATE_OR_SYNC_WORLD_BOOK' }
+  // World Book Card Management IPC
+  | { type: 'GET_WORLDBOOK_CARDS'; worldBookId: string }
+  | { type: 'SAVE_WORLDBOOK_CARD'; worldBookId: string; entry: any }
+  | { type: 'DELETE_WORLDBOOK_CARD'; worldBookId: string; entryId: string }
+  | { type: 'IMPORT_WORLDBOOK_CARDS'; worldBookId: string; cards: any[] }
+  // Character Payload Card Management IPC
   | { type: 'INIT_CHARACTER_PAYLOAD' }
   | { type: 'UPDATE_CHARACTER_CARD_STATE'; cardId: string; state: CardSelectionState }
+  | { type: 'SAVE_CHARACTER_CARD'; characterId: string; card: CharacterPayloadCard }
+  | { type: 'DELETE_CHARACTER_CARD'; characterId: string; cardId: string }
+  | { type: 'IMPORT_CHARACTER_PAYLOAD'; characterId: string; payload: any }
   // Recast IPC
   | { type: 'RECAST_UPDATE_SETTINGS'; settings: Partial<RecastSettings> }
   | { type: 'RECAST_UPDATE_PRESET'; preset: RecastPreset }
@@ -187,6 +196,18 @@ export type FrontendToBackendMessage =
   | { type: 'RECAST_RESET_PRESET'; presetId?: string }
   | { type: 'RECAST_RUN_MESSAGE'; chatId?: string; messageId?: string }
   | { type: 'RECAST_APPLY_RESULT'; chatId: string; messageId: string; text: string; mode: 'replace' | 'swipe' };
+
+export interface WorldBookCardEntryView {
+  id: string;
+  family: string;
+  role: string;
+  priority: number;
+  selectionState: CardSelectionState;
+  description: string;
+  subItems: string[];
+  keys: string[];
+  disabled: boolean;
+}
 
 export type BackendToFrontendMessage =
   | {
@@ -199,6 +220,7 @@ export type BackendToFrontendMessage =
       connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }>;
       worldBooks: WorldBookOption[];
       characterStatus: CharacterPayloadStatus | null;
+      worldBookCards?: WorldBookCardEntryView[];
       recastSettings: RecastSettings;
       recastProgress: RecastProgress | null;
     }
@@ -208,6 +230,7 @@ export type BackendToFrontendMessage =
   | { type: 'DECKS_UPDATED'; decks: Record<string, DeckDefinition>; activeDeckId: string }
   | { type: 'CONNECTIONS'; connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }> }
   | { type: 'WORLD_BOOKS_UPDATED'; worldBooks: WorldBookOption[]; selectedId: string }
+  | { type: 'WORLDBOOK_CARDS_UPDATED'; worldBookId: string; cards: WorldBookCardEntryView[] }
   | { type: 'CHARACTER_STATUS_UPDATED'; status: CharacterPayloadStatus | null }
   // Recast IPC
   | { type: 'RECAST_STATE_UPDATED'; settings: RecastSettings; progress: RecastProgress | null }

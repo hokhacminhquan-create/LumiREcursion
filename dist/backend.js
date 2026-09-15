@@ -876,6 +876,96 @@ function parsePlainTextCardEntry(entry) {
     priority: entry.priority || 80
   };
 }
+async function listWorldBookCardEntries(spindle2, worldBookId) {
+  if (!spindle2?.world_books?.entries?.list || !worldBookId)
+    return [];
+  try {
+    const res = await spindle2.world_books.entries.list(worldBookId);
+    const entries = Array.isArray(res) ? res : res?.data || [];
+    return entries.map((entry) => {
+      let parsed = null;
+      try {
+        parsed = JSON.parse(String(entry.content || ""));
+      } catch {
+        parsed = parsePlainTextCardEntry(entry);
+      }
+      const familyName = parsed?.family || entry.comment || "Scene Card";
+      const roleName = parsed?.role || slugify2(familyName) + "Card";
+      const selectionState = parsed?.selectionState === "priority" || parsed?.selectionState === "off" ? parsed.selectionState : "active";
+      return {
+        id: entry.id,
+        family: familyName,
+        role: roleName,
+        priority: typeof parsed?.priority === "number" ? parsed.priority : entry.priority || 80,
+        selectionState,
+        description: parsed?.description || String(entry.content || ""),
+        subItems: Array.isArray(parsed?.subItems) ? parsed.subItems : [],
+        keys: Array.isArray(entry.key) ? entry.key : [String(entry.key || "")],
+        disabled: Boolean(entry.disabled)
+      };
+    });
+  } catch (err) {
+    console.warn(`[Lumi:REcursion] Failed to list card entries from World Book ${worldBookId}:`, err);
+    return [];
+  }
+}
+async function saveWorldBookEntry(spindle2, worldBookId, entryData) {
+  if (!spindle2?.world_books?.entries)
+    throw new Error("World books entries API unavailable");
+  const familyName = entryData.family.trim();
+  const roleName = entryData.role?.trim() || slugify2(familyName) + "Card";
+  const priority = typeof entryData.priority === "number" ? entryData.priority : 80;
+  const selectionState = entryData.selectionState || "active";
+  const subItems = Array.isArray(entryData.subItems) ? entryData.subItems : [];
+  const payload = {
+    family: familyName,
+    role: roleName,
+    priority,
+    selectionState,
+    description: entryData.description,
+    subItems
+  };
+  const keys = Array.isArray(entryData.keys) && entryData.keys.length > 0 ? entryData.keys : [roleName, slugify2(familyName), "recursion_card"];
+  const entryPayload = {
+    comment: familyName,
+    key: keys,
+    content: JSON.stringify(payload, null, 2),
+    constant: true,
+    disabled: Boolean(entryData.disabled),
+    position: 0,
+    priority
+  };
+  if (entryData.id) {
+    await spindle2.world_books.entries.update(entryData.id, entryPayload);
+  } else {
+    await spindle2.world_books.entries.create(worldBookId, entryPayload);
+  }
+}
+async function deleteWorldBookEntry(spindle2, entryId) {
+  if (!spindle2?.world_books?.entries?.delete)
+    throw new Error("World books delete API unavailable");
+  await spindle2.world_books.entries.delete(entryId);
+}
+async function importWorldBookCards(spindle2, worldBookId, cards) {
+  if (!Array.isArray(cards) || cards.length === 0)
+    return 0;
+  let count = 0;
+  for (const c of cards) {
+    const family = c.family || c.name || c.comment || "Custom Scene Card";
+    await saveWorldBookEntry(spindle2, worldBookId, {
+      family,
+      role: c.role || c.id || slugify2(family) + "Card",
+      priority: typeof c.priority === "number" ? c.priority : 80,
+      selectionState: c.selectionState || "active",
+      description: c.description || c.promptText || "",
+      subItems: Array.isArray(c.subItems) ? c.subItems : [],
+      keys: Array.isArray(c.key || c.keys) ? c.key || c.keys : undefined,
+      disabled: Boolean(c.disabled)
+    });
+    count++;
+  }
+  return count;
+}
 
 // src/cards/character-payload.ts
 var CHARACTER_EXT_KEY = "lumi_recursion";
@@ -996,6 +1086,117 @@ async function updateCharacterCardState(spindle2, characterId, cardId, state) {
     console.warn("[Lumi:REcursion] Failed to update character card state:", err);
     return false;
   }
+}
+async function saveCharacterCard(spindle2, characterId, card) {
+  if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId)
+    return false;
+  try {
+    const char = await spindle2.characters.get(characterId);
+    if (!char)
+      return false;
+    const currentExt = { ...char.extensions || {} };
+    let payload = currentExt[CHARACTER_EXT_KEY];
+    if (!payload || !Array.isArray(payload.cards)) {
+      payload = {
+        version: 1,
+        enabled: true,
+        pipeline: "segmented",
+        cards: []
+      };
+    }
+    const cardId = card.id || card.role || slugify3(card.name || "card") + "Card";
+    const cleanCard = {
+      id: cardId,
+      family: card.family || card.name || "Custom Scene Card",
+      name: card.name || card.family || "Custom Scene Card",
+      role: card.role || cardId,
+      priority: typeof card.priority === "number" ? card.priority : 80,
+      selectionState: card.selectionState || "active",
+      description: card.description || "",
+      promptText: card.promptText || card.description || "",
+      subItems: Array.isArray(card.subItems) ? card.subItems : []
+    };
+    const idx = payload.cards.findIndex((c) => c.id === cardId || c.role === cardId);
+    if (idx !== -1) {
+      payload.cards[idx] = cleanCard;
+    } else {
+      payload.cards.push(cleanCard);
+    }
+    currentExt[CHARACTER_EXT_KEY] = payload;
+    currentExt["lumirecursion_card_defs"] = payload.cards;
+    await spindle2.characters.update(characterId, { extensions: currentExt });
+    return true;
+  } catch (err) {
+    console.error("[Lumi:REcursion] Failed to save character card:", err);
+    return false;
+  }
+}
+async function deleteCharacterCard(spindle2, characterId, cardId) {
+  if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId)
+    return false;
+  try {
+    const char = await spindle2.characters.get(characterId);
+    if (!char || !char.extensions)
+      return false;
+    const currentExt = { ...char.extensions };
+    const payload = currentExt[CHARACTER_EXT_KEY];
+    if (!payload || !Array.isArray(payload.cards))
+      return false;
+    const normalizedId = cardId.replace(/^char:/, "");
+    payload.cards = payload.cards.filter((c) => c.id !== normalizedId && c.role !== normalizedId);
+    currentExt[CHARACTER_EXT_KEY] = payload;
+    currentExt["lumirecursion_card_defs"] = payload.cards;
+    await spindle2.characters.update(characterId, { extensions: currentExt });
+    return true;
+  } catch (err) {
+    console.error("[Lumi:REcursion] Failed to delete character card:", err);
+    return false;
+  }
+}
+async function importCharacterPayload(spindle2, characterId, importedData) {
+  if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId) {
+    throw new Error("Characters API unavailable");
+  }
+  const char = await spindle2.characters.get(characterId);
+  if (!char)
+    throw new Error(`Character ${characterId} not found`);
+  let rawCards = [];
+  if (Array.isArray(importedData)) {
+    rawCards = importedData;
+  } else if (importedData && Array.isArray(importedData.cards)) {
+    rawCards = importedData.cards;
+  } else if (importedData && typeof importedData === "object") {
+    rawCards = importedData.card_defs || importedData.lumi_recursion?.cards || [];
+  }
+  if (rawCards.length === 0) {
+    throw new Error("No valid cards found in imported JSON data.");
+  }
+  const cleanCards = rawCards.map((c, i) => {
+    const family = c.family || c.name || `Card ${i + 1}`;
+    const role = c.role || c.id || slugify3(family) + "Card";
+    return {
+      id: role,
+      family,
+      name: c.name || family,
+      role,
+      priority: typeof c.priority === "number" ? c.priority : 80,
+      selectionState: c.selectionState || "active",
+      description: c.description || c.promptText || "",
+      promptText: c.promptText || c.description || "",
+      subItems: Array.isArray(c.subItems) ? c.subItems : []
+    };
+  });
+  const currentExt = { ...char.extensions || {} };
+  const payload = {
+    version: 1,
+    enabled: true,
+    pipeline: "segmented",
+    cards: cleanCards
+  };
+  currentExt[CHARACTER_EXT_KEY] = payload;
+  currentExt["lumirecursion_card_defs"] = cleanCards;
+  await spindle2.characters.update(characterId, { extensions: currentExt });
+  return { success: true, cardCount: cleanCards.length };
 }
 
 // src/recast/pipeline.ts
@@ -1629,6 +1830,11 @@ async function resolveTurnCards(context) {
         const wbs = await listAvailableWorldBooks(sp);
         const activeCharId = await getActiveCharacterId();
         const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId) : null;
+        let wbCards = [];
+        const effectiveWbId = settings.worldBookId || wbs.find((w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name === "Recursion Cards")?.id;
+        if (effectiveWbId) {
+          wbCards = await listWorldBookCardEntries(sp, effectiveWbId);
+        }
         sp.sendToFrontend({
           type: "STATE",
           settings,
@@ -1639,6 +1845,7 @@ async function resolveTurnCards(context) {
           connections: conns,
           worldBooks: wbs,
           characterStatus: charStatus,
+          worldBookCards: wbCards,
           recastSettings,
           recastProgress
         });
@@ -1658,7 +1865,9 @@ async function resolveTurnCards(context) {
           settings.cardSourceMode = "world_book";
           await storage.saveSettings(settings);
           const wbs = await listAvailableWorldBooks(sp);
+          const cards = await listWorldBookCardEntries(sp, result.worldBookId);
           sp.sendToFrontend({ type: "WORLD_BOOKS_UPDATED", worldBooks: wbs, selectedId: result.worldBookId });
+          sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: result.worldBookId, cards });
           sp.sendToFrontend({ type: "SETTINGS_UPDATED", settings });
           sp.toast?.success?.(`\uD83D\uDCD6 World Book "${DEFAULT_WORLDBOOK_NAME}" synced with ${result.createdCount} card entries!`);
         } catch (err) {
@@ -1927,6 +2136,77 @@ async function resolveTurnCards(context) {
         } catch (err) {
           console.error("[Lumi:REcursion:Recast] Failed to apply recast result:", err);
           sp.toast?.error?.(`Failed to apply recast: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "GET_WORLDBOOK_CARDS": {
+        const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+        sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
+        break;
+      }
+      case "SAVE_WORLDBOOK_CARD": {
+        try {
+          await saveWorldBookEntry(sp, msg.worldBookId, msg.entry);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
+          sp.toast?.success?.(`\uD83D\uDCBE Card "${msg.entry.family}" saved to World Book`);
+        } catch (err) {
+          sp.toast?.error?.(`Failed to save entry: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "DELETE_WORLDBOOK_CARD": {
+        try {
+          await deleteWorldBookEntry(sp, msg.entryId);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
+          sp.toast?.info?.("\uD83D\uDDD1\uFE0F Card entry removed from World Book");
+        } catch (err) {
+          sp.toast?.error?.(`Failed to delete entry: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "IMPORT_WORLDBOOK_CARDS": {
+        try {
+          const count = await importWorldBookCards(sp, msg.worldBookId, msg.cards);
+          const cards = await listWorldBookCardEntries(sp, msg.worldBookId);
+          sp.sendToFrontend({ type: "WORLDBOOK_CARDS_UPDATED", worldBookId: msg.worldBookId, cards });
+          sp.toast?.success?.(`\uD83D\uDCE5 Imported ${count} card entries into World Book!`);
+        } catch (err) {
+          sp.toast?.error?.(`Failed to import cards: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "SAVE_CHARACTER_CARD": {
+        try {
+          await saveCharacterCard(sp, msg.characterId, msg.card);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status });
+          sp.toast?.success?.(`\uD83D\uDCBE Card "${msg.card.name}" saved to character payload`);
+        } catch (err) {
+          sp.toast?.error?.(`Failed to save card: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "DELETE_CHARACTER_CARD": {
+        try {
+          await deleteCharacterCard(sp, msg.characterId, msg.cardId);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status });
+          sp.toast?.info?.("\uD83D\uDDD1\uFE0F Card removed from character payload");
+        } catch (err) {
+          sp.toast?.error?.(`Failed to delete card: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "IMPORT_CHARACTER_PAYLOAD": {
+        try {
+          const res = await importCharacterPayload(sp, msg.characterId, msg.payload);
+          const status = await getCharacterPayloadStatus(sp, msg.characterId);
+          sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status });
+          sp.toast?.success?.(`\uD83D\uDCE5 Imported ${res.cardCount} cards into character payload!`);
+        } catch (err) {
+          sp.toast?.error?.(`Failed to import payload: ${err?.message || err}`);
         }
         break;
       }
