@@ -329,6 +329,8 @@ var DEFAULT_SETTINGS = {
   enabled: true,
   mode: "auto",
   pipeline: "segmented",
+  cardSourceMode: "world_book",
+  worldBookId: "",
   promptFootprint: "normal",
   connectionProfileId: "",
   storyForm: {
@@ -587,6 +589,276 @@ function assemblePromptPacket(cards, storyForm, footprint = "normal") {
 `);
 }
 
+// src/cards/worldbook.ts
+var DEFAULT_WORLDBOOK_NAME = "Lumi:REcursion Cards";
+function slugify2(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+async function listAvailableWorldBooks(spindle2) {
+  try {
+    if (spindle2?.world_books?.list) {
+      const result = await spindle2.world_books.list();
+      const list = Array.isArray(result) ? result : result?.data || [];
+      return list.map((wb) => ({
+        id: wb.id,
+        name: wb.name || "Untitled World Book",
+        entryCount: wb.entry_count
+      }));
+    }
+  } catch (err) {
+    console.warn("[Lumi:REcursion] Failed to list world books:", err);
+  }
+  return [];
+}
+async function createOrSyncRecursionWorldBook(spindle2, activeCharacterId) {
+  if (!spindle2?.world_books) {
+    throw new Error("Spindle world_books API is not available (check permissions in spindle.json)");
+  }
+  const existingBooks = await listAvailableWorldBooks(spindle2);
+  let book = existingBooks.find((b) => b.name === DEFAULT_WORLDBOOK_NAME || b.name === "Recursion Cards");
+  let worldBookId;
+  if (!book) {
+    const created = await spindle2.world_books.create({
+      name: DEFAULT_WORLDBOOK_NAME,
+      description: "Scene reasoning card definitions for Lumi:REcursion extension"
+    });
+    worldBookId = created.id;
+    console.log(`[Lumi:REcursion] Created new World Book: "${DEFAULT_WORLDBOOK_NAME}" (${worldBookId})`);
+  } else {
+    worldBookId = book.id;
+  }
+  let existingEntries = [];
+  try {
+    const entriesRes = await spindle2.world_books.entries.list(worldBookId);
+    existingEntries = Array.isArray(entriesRes) ? entriesRes : entriesRes?.data || [];
+  } catch (err) {
+    console.warn("[Lumi:REcursion] Could not list entries:", err);
+  }
+  const existingComments = new Set(existingEntries.map((e) => String(e.comment || "").trim()));
+  let createdCount = 0;
+  for (const entry of CARD_SCOPE_CATALOG) {
+    if (existingComments.has(entry.family)) {
+      continue;
+    }
+    const payload = {
+      family: entry.family,
+      role: entry.role,
+      priority: entry.priority,
+      selectionState: entry.family === "Scene Frame" || entry.family === "Scene Constraints" ? "priority" : "active",
+      description: entry.description,
+      subItems: entry.subItems.map((s) => `${s.key}: ${s.description}`)
+    };
+    const entryData = {
+      comment: entry.family,
+      key: [entry.role, slugify2(entry.family), "recursion_card"],
+      content: JSON.stringify(payload, null, 2),
+      constant: true,
+      disabled: false,
+      position: 0,
+      priority: entry.priority
+    };
+    try {
+      await spindle2.world_books.entries.create(worldBookId, entryData);
+      createdCount++;
+    } catch (err) {
+      console.error(`[Lumi:REcursion] Failed to create entry for ${entry.family}:`, err);
+    }
+  }
+  if (activeCharacterId && spindle2.characters?.get && spindle2.characters?.update) {
+    try {
+      const char = await spindle2.characters.get(activeCharacterId);
+      if (char) {
+        const wbIds = Array.isArray(char.world_book_ids) ? [...char.world_book_ids] : [];
+        if (!wbIds.includes(worldBookId)) {
+          wbIds.push(worldBookId);
+          await spindle2.characters.update(activeCharacterId, { world_book_ids: wbIds });
+          console.log(`[Lumi:REcursion] Attached World Book ${worldBookId} to character ${char.name}`);
+        }
+      }
+    } catch (err) {
+      console.warn("[Lumi:REcursion] Failed to attach world book to character:", err);
+    }
+  }
+  return { worldBookId, createdCount };
+}
+async function readCardsFromWorldBook(spindle2, worldBookId) {
+  if (!spindle2?.world_books?.entries?.list || !worldBookId) {
+    return [];
+  }
+  try {
+    const res = await spindle2.world_books.entries.list(worldBookId);
+    const entries = Array.isArray(res) ? res : res?.data || [];
+    const cards = [];
+    for (const entry of entries) {
+      if (entry.disabled === true) {
+        continue;
+      }
+      const contentStr = String(entry.content || "").trim();
+      if (!contentStr)
+        continue;
+      let parsed = null;
+      try {
+        parsed = JSON.parse(contentStr);
+      } catch {
+        parsed = parsePlainTextCardEntry(entry);
+      }
+      if (parsed && typeof parsed === "object") {
+        const familyName = parsed.family || entry.comment || "Scene Card";
+        const roleName = parsed.role || slugify2(familyName) + "Card";
+        const selectionState = parsed.selectionState === "priority" || parsed.selectionState === "off" ? parsed.selectionState : "active";
+        cards.push({
+          id: `wb:${entry.id}`,
+          categoryId: slugify2(familyName),
+          name: familyName,
+          description: parsed.description || contentStr.slice(0, 160),
+          promptText: parsed.description || contentStr,
+          selectionState,
+          builtinFamily: familyName,
+          builtinRoleId: roleName,
+          priority: typeof parsed.priority === "number" ? parsed.priority : entry.priority || 80,
+          selectedSubItems: Array.isArray(parsed.subItems) ? parsed.subItems : []
+        });
+      }
+    }
+    return cards;
+  } catch (err) {
+    console.warn(`[Lumi:REcursion] Failed to read cards from World Book ${worldBookId}:`, err);
+    return [];
+  }
+}
+function parsePlainTextCardEntry(entry) {
+  const comment = String(entry.comment || "").trim();
+  const content = String(entry.content || "").trim();
+  return {
+    family: comment || "Custom Card",
+    role: slugify2(comment || "card") + "Card",
+    description: content,
+    selectionState: "active",
+    priority: entry.priority || 80
+  };
+}
+
+// src/cards/character-payload.ts
+var CHARACTER_EXT_KEY = "lumi_recursion";
+function slugify3(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function createDefaultCharacterCards() {
+  return CARD_SCOPE_CATALOG.map((entry) => ({
+    id: entry.role,
+    family: entry.family,
+    name: entry.family,
+    role: entry.role,
+    priority: entry.priority,
+    selectionState: entry.family === "Scene Frame" || entry.family === "Scene Constraints" ? "priority" : "active",
+    description: entry.description,
+    promptText: entry.description,
+    subItems: entry.subItems.map((s) => `${s.key}: ${s.description}`)
+  }));
+}
+async function getCharacterPayloadStatus(spindle2, characterId) {
+  if (!spindle2?.characters?.get || !characterId)
+    return null;
+  try {
+    const char = await spindle2.characters.get(characterId);
+    if (!char)
+      return null;
+    const ext = char.extensions || {};
+    const payload = ext[CHARACTER_EXT_KEY] || ext["lumirecursion"] || ext["card_defs"];
+    const cards = Array.isArray(payload?.cards) ? payload.cards : Array.isArray(payload) ? payload : [];
+    return {
+      id: char.id,
+      name: char.name,
+      hasPayload: cards.length > 0,
+      cardCount: cards.length,
+      cards
+    };
+  } catch (err) {
+    console.warn("[Lumi:REcursion] Failed to get character payload status:", err);
+    return null;
+  }
+}
+async function initCharacterCardPayload(spindle2, characterId) {
+  if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId) {
+    throw new Error("Spindle characters API is not available or no active character.");
+  }
+  const char = await spindle2.characters.get(characterId);
+  if (!char) {
+    throw new Error(`Character ${characterId} not found.`);
+  }
+  const defaultCards = createDefaultCharacterCards();
+  const currentExtensions = { ...char.extensions || {} };
+  const payload = {
+    version: 1,
+    enabled: true,
+    pipeline: "segmented",
+    cards: defaultCards
+  };
+  currentExtensions[CHARACTER_EXT_KEY] = payload;
+  currentExtensions["lumirecursion_card_defs"] = defaultCards;
+  await spindle2.characters.update(characterId, {
+    extensions: currentExtensions
+  });
+  console.log(`[Lumi:REcursion] Initialized character extension payload on "${char.name}" with ${defaultCards.length} cards.`);
+  return { success: true, cardCount: defaultCards.length };
+}
+async function readCardsFromCharacter(spindle2, characterId) {
+  if (!spindle2?.characters?.get || !characterId)
+    return [];
+  try {
+    const char = await spindle2.characters.get(characterId);
+    if (!char || !char.extensions)
+      return [];
+    const ext = char.extensions;
+    const payload = ext[CHARACTER_EXT_KEY] || ext["lumirecursion"] || ext["card_defs"];
+    const rawCards = Array.isArray(payload?.cards) ? payload.cards : Array.isArray(payload) ? payload : [];
+    return rawCards.map((c) => {
+      const familyName = c.family || c.name || "Character Scene Card";
+      const roleName = c.role || slugify3(familyName) + "Card";
+      const selectionState = c.selectionState === "priority" || c.selectionState === "off" ? c.selectionState : "active";
+      return {
+        id: `char:${c.id || roleName}`,
+        categoryId: slugify3(familyName),
+        name: c.name || familyName,
+        description: c.description || "",
+        promptText: c.promptText || c.description || "",
+        selectionState,
+        builtinFamily: familyName,
+        builtinRoleId: roleName,
+        priority: typeof c.priority === "number" ? c.priority : 80,
+        selectedSubItems: Array.isArray(c.subItems) ? c.subItems : []
+      };
+    });
+  } catch (err) {
+    console.warn(`[Lumi:REcursion] Failed to read cards from character ${characterId}:`, err);
+    return [];
+  }
+}
+async function updateCharacterCardState(spindle2, characterId, cardId, state) {
+  if (!spindle2?.characters?.get || !spindle2?.characters?.update || !characterId)
+    return false;
+  try {
+    const char = await spindle2.characters.get(characterId);
+    if (!char || !char.extensions)
+      return false;
+    const currentExt = { ...char.extensions };
+    const payload = currentExt[CHARACTER_EXT_KEY];
+    if (!payload || !Array.isArray(payload.cards))
+      return false;
+    const normalizedId = cardId.replace(/^char:/, "");
+    const found = payload.cards.find((c) => c.id === normalizedId || c.role === normalizedId);
+    if (found) {
+      found.selectionState = state;
+      await spindle2.characters.update(characterId, { extensions: currentExt });
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn("[Lumi:REcursion] Failed to update character card state:", err);
+    return false;
+  }
+}
+
 // src/backend.ts
 var sp = typeof spindle !== "undefined" ? spindle : null;
 var settings = { ...DEFAULT_SETTINGS };
@@ -643,6 +915,67 @@ async function resolveConnectionId(profileId) {
   const def = conns.find((c) => c.is_default) || conns[0];
   return def ? def.id : undefined;
 }
+async function getActiveCharacterId() {
+  try {
+    if (sp?.chats?.getActive) {
+      const chat = await sp.chats.getActive();
+      return chat?.characterId || chat?.character_id || null;
+    }
+  } catch {}
+  return null;
+}
+async function resolveTurnCards(context) {
+  let candidateCards = [];
+  if (settings.cardSourceMode === "world_book") {
+    let wbId = settings.worldBookId;
+    if (!wbId && context?.characterId && sp?.characters?.get) {
+      try {
+        const char = await sp.characters.get(context.characterId);
+        if (char && Array.isArray(char.world_book_ids)) {
+          const wbs = await listAvailableWorldBooks(sp);
+          const matched = wbs.find((w) => char.world_book_ids.includes(w.id) && (w.name.includes("Recursion") || w.name.includes("Lumi:REcursion")));
+          if (matched)
+            wbId = matched.id;
+        }
+      } catch {}
+    }
+    if (!wbId) {
+      const wbs = await listAvailableWorldBooks(sp);
+      const matched = wbs.find((w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name.includes("Recursion Cards"));
+      if (matched)
+        wbId = matched.id;
+    }
+    if (wbId) {
+      candidateCards = await readCardsFromWorldBook(sp, wbId);
+      console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from World Book (${wbId})`);
+    }
+  } else if (settings.cardSourceMode === "character_ext") {
+    let charId = context?.characterId;
+    if (!charId) {
+      charId = await getActiveCharacterId();
+    }
+    if (charId) {
+      candidateCards = await readCardsFromCharacter(sp, charId);
+      console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from Character Payload (${charId})`);
+    }
+  }
+  if (!candidateCards.length) {
+    const currentDeck = decks[activeDeckId] || decks[DEFAULT_DECK_ID];
+    if (currentDeck && currentDeck.cards) {
+      candidateCards = Object.values(currentDeck.cards);
+    }
+  }
+  const eligible = candidateCards.filter((c) => c.selectionState !== "off");
+  const priorityCards = eligible.filter((c) => c.selectionState === "priority");
+  const normalCards = eligible.filter((c) => c.selectionState === "active");
+  const selectedCards = [...priorityCards, ...normalCards].slice(0, settings.maxCards);
+  const omittedCards = [...priorityCards, ...normalCards].slice(settings.maxCards).map((c) => ({
+    cardId: c.id,
+    family: c.builtinFamily || c.name,
+    reason: "max-cards"
+  }));
+  return { selectedCards, omittedCards };
+}
 (async () => {
   if (!sp) {
     console.error("[Lumi:REcursion] Spindle API not available");
@@ -654,7 +987,7 @@ async function resolveConnectionId(profileId) {
   decks = deckData.decks;
   activeDeckId = deckData.activeDeckId;
   lastBrief = await storage.loadLastBrief();
-  console.log("[Lumi:REcursion] Initialized with active deck:", activeDeckId, "Enabled:", settings.enabled);
+  console.log("[Lumi:REcursion] Initialized with source mode:", settings.cardSourceMode, "Active deck:", activeDeckId, "Enabled:", settings.enabled);
   sp.registerInterceptor(async (messages, context) => {
     if (!settings.enabled) {
       return messages;
@@ -663,19 +996,7 @@ async function resolveConnectionId(profileId) {
       return messages;
     }
     settings.manualTurnArmed = false;
-    const currentDeck = decks[activeDeckId] || decks[DEFAULT_DECK_ID];
-    if (!currentDeck || !currentDeck.cards) {
-      return messages;
-    }
-    const allCards = Object.values(currentDeck.cards);
-    const priorityCards = allCards.filter((c) => c.selectionState === "priority");
-    const normalActiveCards = allCards.filter((c) => c.selectionState === "active");
-    const selectedCards = [...priorityCards, ...normalActiveCards].slice(0, settings.maxCards);
-    const omittedCards = [...priorityCards, ...normalActiveCards].slice(settings.maxCards).map((c) => ({
-      cardId: c.id,
-      family: c.builtinFamily || c.name,
-      reason: "max-cards"
-    }));
+    const { selectedCards, omittedCards } = await resolveTurnCards(context);
     if (!selectedCards.length) {
       return messages;
     }
@@ -722,7 +1043,7 @@ async function resolveConnectionId(profileId) {
       pipeline: settings.pipeline,
       phase: "running",
       pixels: initialPixels,
-      currentStepText: `Evaluating ${selectedCards.length} scene cards in parallel...`
+      currentStepText: `Evaluating ${selectedCards.length} scene cards in parallel (${settings.cardSourceMode})...`
     });
     const tStart = Date.now();
     let evaluatedCards = [];
@@ -866,7 +1187,7 @@ async function resolveConnectionId(profileId) {
       pipeline: settings.pipeline,
       phase: "done",
       pixels: initialPixels,
-      currentStepText: `Ready. ${evaluatedCards.length} cards prepared in ${totalLatency}ms.`
+      currentStepText: `Ready. ${evaluatedCards.length} cards prepared in ${totalLatency}ms (${settings.cardSourceMode}).`
     });
     if (sp.sendToFrontend) {
       sp.sendToFrontend({ type: "BRIEF_UPDATED", brief });
@@ -887,6 +1208,9 @@ async function resolveConnectionId(profileId) {
     switch (msg.type) {
       case "GET_STATE": {
         const conns = await listConnections();
+        const wbs = await listAvailableWorldBooks(sp);
+        const activeCharId = await getActiveCharacterId();
+        const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId) : null;
         sp.sendToFrontend({
           type: "STATE",
           settings,
@@ -894,7 +1218,9 @@ async function resolveConnectionId(profileId) {
           activeDeckId,
           lastBrief,
           progress: currentProgress,
-          connections: conns
+          connections: conns,
+          worldBooks: wbs,
+          characterStatus: charStatus
         });
         break;
       }
@@ -902,6 +1228,54 @@ async function resolveConnectionId(profileId) {
         settings = { ...settings, ...msg.settings };
         await storage.saveSettings(settings);
         sp.sendToFrontend({ type: "SETTINGS_UPDATED", settings });
+        break;
+      }
+      case "CREATE_OR_SYNC_WORLD_BOOK": {
+        try {
+          const activeCharId = await getActiveCharacterId();
+          const result = await createOrSyncRecursionWorldBook(sp, activeCharId);
+          settings.worldBookId = result.worldBookId;
+          settings.cardSourceMode = "world_book";
+          await storage.saveSettings(settings);
+          const wbs = await listAvailableWorldBooks(sp);
+          sp.sendToFrontend({ type: "WORLD_BOOKS_UPDATED", worldBooks: wbs, selectedId: result.worldBookId });
+          sp.sendToFrontend({ type: "SETTINGS_UPDATED", settings });
+          sp.toast?.success?.(`\uD83D\uDCD6 World Book "${DEFAULT_WORLDBOOK_NAME}" synced with ${result.createdCount} card entries!`);
+        } catch (err) {
+          sp.toast?.error?.(`Failed to sync world book: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "INIT_CHARACTER_PAYLOAD": {
+        try {
+          const activeCharId = await getActiveCharacterId();
+          if (!activeCharId) {
+            sp.toast?.warn?.("No active character selected in chat.");
+            break;
+          }
+          const res = await initCharacterCardPayload(sp, activeCharId);
+          settings.cardSourceMode = "character_ext";
+          await storage.saveSettings(settings);
+          const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+          sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status: charStatus });
+          sp.sendToFrontend({ type: "SETTINGS_UPDATED", settings });
+          sp.toast?.success?.(`\uD83D\uDC64 Initialized ${res.cardCount} cards in character extension payload!`);
+        } catch (err) {
+          sp.toast?.error?.(`Failed to init character payload: ${err?.message || err}`);
+        }
+        break;
+      }
+      case "UPDATE_CHARACTER_CARD_STATE": {
+        try {
+          const activeCharId = await getActiveCharacterId();
+          if (activeCharId) {
+            await updateCharacterCardState(sp, activeCharId, msg.cardId, msg.state);
+            const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+            sp.sendToFrontend({ type: "CHARACTER_STATUS_UPDATED", status: charStatus });
+          }
+        } catch (err) {
+          console.warn("[Lumi:REcursion] Failed to update character card state:", err);
+        }
         break;
       }
       case "SET_CARD_STATE": {

@@ -1,6 +1,10 @@
 /**
  * Lumi:REcursion — Backend
  * Scene reasoning, turn-bound card system & parallel card evaluation for Lumiverse
+ * Supports 3 Card Source Modes:
+ *   - Option A: World Book Mode (reads entries from a Lumiverse World Book)
+ *   - Option B: Character Extension Payload Mode (reads from character.extensions.lumi_recursion)
+ *   - Local Decks Mode (reads from extension's deck manager)
  */
 
 import type {
@@ -9,6 +13,7 @@ import type {
   TurnBrief,
   EvaluatedCard,
   CardOmission,
+  CardDefinition,
   RunProgressState,
   HeroPixelItem,
   FrontendToBackendMessage
@@ -22,6 +27,18 @@ import {
   assemblePromptPacket
 } from './prompt/composer';
 import { DEFAULT_DECK_ID } from './cards/defaults';
+import {
+  listAvailableWorldBooks,
+  createOrSyncRecursionWorldBook,
+  readCardsFromWorldBook,
+  DEFAULT_WORLDBOOK_NAME
+} from './cards/worldbook';
+import {
+  getCharacterPayloadStatus,
+  initCharacterCardPayload,
+  readCardsFromCharacter,
+  updateCharacterCardState
+} from './cards/character-payload';
 
 // Declare ambient spindle object provided by Lumiverse Spindle host
 declare const spindle: any;
@@ -99,6 +116,95 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
   return def ? def.id : undefined;
 }
 
+async function getActiveCharacterId(): Promise<string | null> {
+  try {
+    if (sp?.chats?.getActive) {
+      const chat = await sp.chats.getActive();
+      return chat?.characterId || chat?.character_id || null;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Resolves the candidate cards for this turn based on the selected cardSourceMode:
+ * - 'world_book': reads entries from attached or configured World Book
+ * - 'character_ext': reads from character.extensions.lumi_recursion
+ * - 'local_deck': reads from local deck manager (decks.json)
+ */
+async function resolveTurnCards(
+  context: any
+): Promise<{ selectedCards: CardDefinition[]; omittedCards: CardOmission[] }> {
+  let candidateCards: CardDefinition[] = [];
+
+  // ── Option A: World Book Mode ──
+  if (settings.cardSourceMode === 'world_book') {
+    let wbId = settings.worldBookId;
+    if (!wbId && context?.characterId && sp?.characters?.get) {
+      try {
+        const char = await sp.characters.get(context.characterId);
+        if (char && Array.isArray(char.world_book_ids)) {
+          const wbs = await listAvailableWorldBooks(sp);
+          const matched = wbs.find(
+            (w) =>
+              char.world_book_ids.includes(w.id) &&
+              (w.name.includes('Recursion') || w.name.includes('Lumi:REcursion'))
+          );
+          if (matched) wbId = matched.id;
+        }
+      } catch {}
+    }
+    if (!wbId) {
+      const wbs = await listAvailableWorldBooks(sp);
+      const matched = wbs.find(
+        (w) => w.name === DEFAULT_WORLDBOOK_NAME || w.name.includes('Recursion Cards')
+      );
+      if (matched) wbId = matched.id;
+    }
+
+    if (wbId) {
+      candidateCards = await readCardsFromWorldBook(sp, wbId);
+      console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from World Book (${wbId})`);
+    }
+  }
+  // ── Option B: Character Extension Payload Mode ──
+  else if (settings.cardSourceMode === 'character_ext') {
+    let charId = context?.characterId;
+    if (!charId) {
+      charId = await getActiveCharacterId();
+    }
+
+    if (charId) {
+      candidateCards = await readCardsFromCharacter(sp, charId);
+      console.log(`[Lumi:REcursion] Loaded ${candidateCards.length} cards from Character Payload (${charId})`);
+    }
+  }
+
+  // Fallback to local deck if mode didn't return cards (or if local_deck mode is selected)
+  if (!candidateCards.length) {
+    const currentDeck = decks[activeDeckId] || decks[DEFAULT_DECK_ID];
+    if (currentDeck && currentDeck.cards) {
+      candidateCards = Object.values(currentDeck.cards);
+    }
+  }
+
+  // Filter out 'off' cards
+  const eligible = candidateCards.filter((c) => c.selectionState !== 'off');
+  const priorityCards = eligible.filter((c) => c.selectionState === 'priority');
+  const normalCards = eligible.filter((c) => c.selectionState === 'active');
+
+  const selectedCards = [...priorityCards, ...normalCards].slice(0, settings.maxCards);
+  const omittedCards: CardOmission[] = [...priorityCards, ...normalCards]
+    .slice(settings.maxCards)
+    .map((c) => ({
+      cardId: c.id,
+      family: c.builtinFamily || c.name,
+      reason: 'max-cards'
+    }));
+
+  return { selectedCards, omittedCards };
+}
+
 // ─── Main Backend Initialization ─────────────────────────────────────────────
 
 ;(async () => {
@@ -114,7 +220,14 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
   activeDeckId = deckData.activeDeckId;
   lastBrief = await storage.loadLastBrief();
 
-  console.log('[Lumi:REcursion] Initialized with active deck:', activeDeckId, 'Enabled:', settings.enabled);
+  console.log(
+    '[Lumi:REcursion] Initialized with source mode:',
+    settings.cardSourceMode,
+    'Active deck:',
+    activeDeckId,
+    'Enabled:',
+    settings.enabled
+  );
 
   // ── 1. Interceptor ─────────────────────────────────────────────────────────
   // Runs before generation, modifies prompt by injecting the compiled scene reasoning packet
@@ -130,26 +243,8 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
       }
       settings.manualTurnArmed = false;
 
-      // Extract current active deck
-      const currentDeck = decks[activeDeckId] || decks[DEFAULT_DECK_ID];
-      if (!currentDeck || !currentDeck.cards) {
-        return messages;
-      }
-
-      // Collect all eligible cards from active deck
-      const allCards = Object.values(currentDeck.cards);
-      const priorityCards = allCards.filter((c) => c.selectionState === 'priority');
-      const normalActiveCards = allCards.filter((c) => c.selectionState === 'active');
-
-      // Sort priority cards first, then normal active cards, bounded by maxCards
-      const selectedCards = [...priorityCards, ...normalActiveCards].slice(0, settings.maxCards);
-      const omittedCards: CardOmission[] = [...priorityCards, ...normalActiveCards]
-        .slice(settings.maxCards)
-        .map((c) => ({
-          cardId: c.id,
-          family: c.builtinFamily || c.name,
-          reason: 'max-cards'
-        }));
+      // Resolve turn cards dynamically from World Book, Character, or Local Deck
+      const { selectedCards, omittedCards } = await resolveTurnCards(context);
 
       if (!selectedCards.length) {
         return messages;
@@ -207,7 +302,7 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
         pipeline: settings.pipeline,
         phase: 'running',
         pixels: initialPixels,
-        currentStepText: `Evaluating ${selectedCards.length} scene cards in parallel...`
+        currentStepText: `Evaluating ${selectedCards.length} scene cards in parallel (${settings.cardSourceMode})...`
       });
 
       const tStart = Date.now();
@@ -394,7 +489,7 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
         pipeline: settings.pipeline,
         phase: 'done',
         pixels: initialPixels,
-        currentStepText: `Ready. ${evaluatedCards.length} cards prepared in ${totalLatency}ms.`
+        currentStepText: `Ready. ${evaluatedCards.length} cards prepared in ${totalLatency}ms (${settings.cardSourceMode}).`
       });
 
       if (sp.sendToFrontend) {
@@ -421,6 +516,10 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
     switch (msg.type) {
       case 'GET_STATE': {
         const conns = await listConnections();
+        const wbs = await listAvailableWorldBooks(sp);
+        const activeCharId = await getActiveCharacterId();
+        const charStatus = activeCharId ? await getCharacterPayloadStatus(sp, activeCharId) : null;
+
         sp.sendToFrontend({
           type: 'STATE',
           settings,
@@ -428,7 +527,9 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
           activeDeckId,
           lastBrief,
           progress: currentProgress,
-          connections: conns
+          connections: conns,
+          worldBooks: wbs,
+          characterStatus: charStatus
         });
         break;
       }
@@ -437,6 +538,59 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
         settings = { ...settings, ...msg.settings };
         await storage.saveSettings(settings);
         sp.sendToFrontend({ type: 'SETTINGS_UPDATED', settings });
+        break;
+      }
+
+      case 'CREATE_OR_SYNC_WORLD_BOOK': {
+        try {
+          const activeCharId = await getActiveCharacterId();
+          const result = await createOrSyncRecursionWorldBook(sp, activeCharId);
+          settings.worldBookId = result.worldBookId;
+          settings.cardSourceMode = 'world_book';
+          await storage.saveSettings(settings);
+
+          const wbs = await listAvailableWorldBooks(sp);
+          sp.sendToFrontend({ type: 'WORLD_BOOKS_UPDATED', worldBooks: wbs, selectedId: result.worldBookId });
+          sp.sendToFrontend({ type: 'SETTINGS_UPDATED', settings });
+          sp.toast?.success?.(`📖 World Book "${DEFAULT_WORLDBOOK_NAME}" synced with ${result.createdCount} card entries!`);
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to sync world book: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      case 'INIT_CHARACTER_PAYLOAD': {
+        try {
+          const activeCharId = await getActiveCharacterId();
+          if (!activeCharId) {
+            sp.toast?.warn?.('No active character selected in chat.');
+            break;
+          }
+          const res = await initCharacterCardPayload(sp, activeCharId);
+          settings.cardSourceMode = 'character_ext';
+          await storage.saveSettings(settings);
+
+          const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+          sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status: charStatus });
+          sp.sendToFrontend({ type: 'SETTINGS_UPDATED', settings });
+          sp.toast?.success?.(`👤 Initialized ${res.cardCount} cards in character extension payload!`);
+        } catch (err: any) {
+          sp.toast?.error?.(`Failed to init character payload: ${err?.message || err}`);
+        }
+        break;
+      }
+
+      case 'UPDATE_CHARACTER_CARD_STATE': {
+        try {
+          const activeCharId = await getActiveCharacterId();
+          if (activeCharId) {
+            await updateCharacterCardState(sp, activeCharId, msg.cardId, msg.state);
+            const charStatus = await getCharacterPayloadStatus(sp, activeCharId);
+            sp.sendToFrontend({ type: 'CHARACTER_STATUS_UPDATED', status: charStatus });
+          }
+        } catch (err: any) {
+          console.warn('[Lumi:REcursion] Failed to update character card state:', err);
+        }
         break;
       }
 
@@ -454,9 +608,10 @@ async function resolveConnectionId(profileId: string): Promise<string | undefine
       case 'BULK_SET_CARDS': {
         const targetDeck = decks[msg.deckId];
         if (targetDeck) {
-          const cardIds = msg.categoryId && targetDeck.cardOrderByCategory[msg.categoryId]
-            ? targetDeck.cardOrderByCategory[msg.categoryId]
-            : Object.keys(targetDeck.cards);
+          const cardIds =
+            msg.categoryId && targetDeck.cardOrderByCategory[msg.categoryId]
+              ? targetDeck.cardOrderByCategory[msg.categoryId]
+              : Object.keys(targetDeck.cards);
 
           for (const cId of cardIds) {
             if (targetDeck.cards[cId]) {

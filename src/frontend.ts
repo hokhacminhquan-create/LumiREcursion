@@ -1,6 +1,10 @@
 /**
  * Lumi:REcursion — Frontend
  * Technical Graphite Dark UI for Scene Reasoning in Lumiverse Spindle
+ * Supports 3 Card Source Modes:
+ *   - Option A: World Book Mode
+ *   - Option B: Character Extension Payload Mode
+ *   - Local Decks Mode
  */
 
 import type {
@@ -9,12 +13,19 @@ import type {
   TurnBrief,
   RunProgressState,
   CardSelectionState,
+  CardSourceMode,
+  WorldBookOption,
+  CharacterPayloadStatus,
   BackendToFrontendMessage
 } from './types';
 import { DEFAULT_DECK_ID } from './cards/defaults';
 
 // SVG Icons adhering to Recursion's technical graphite design
 const RECURSION_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12"/><path d="M12 6a6 6 0 0 1 6 6c0 3.314-2.686 6-6 6s-6-2.686-6-6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>`;
+
+const BOOK_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>`;
+
+const USER_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
 
 const DUPLICATE_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 
@@ -23,6 +34,8 @@ const TRASH_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="no
 const COPY_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 
 const REFRESH_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+
+const SPARKLE_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>`;
 
 // ─── Stylesheet ──────────────────────────────────────────────────────────────
 
@@ -86,6 +99,45 @@ const STYLES = `
   background: rgba(255, 212, 121, 0.15);
   border-color: #ffd479;
   color: #ffd479;
+}
+
+/* Source Mode Segment Bar */
+.lr-source-segments {
+  display: flex;
+  background: #202020;
+  border: 1px solid #383838;
+  border-radius: 6px;
+  padding: 3px;
+  gap: 4px;
+}
+
+.lr-source-btn {
+  flex: 1;
+  text-align: center;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #999;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.lr-source-btn:hover {
+  background: #2a2a2a;
+  color: #ddd;
+}
+
+.lr-source-btn.active {
+  background: rgba(101, 214, 232, 0.15);
+  color: #65d6e8;
+  border-color: #65d6e8;
 }
 
 /* Switch Toggle */
@@ -236,6 +288,17 @@ const STYLES = `
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.lr-info-box {
+  background: #1b1b1b;
+  border: 1px solid #333;
+  border-left: 3px solid #65d6e8;
+  border-radius: 0 5px 5px 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #a8a8a8;
+  line-height: 1.4;
 }
 
 /* Deck Controls */
@@ -413,20 +476,6 @@ const STYLES = `
   line-height: 1.4;
 }
 
-.lr-packet-preview {
-  background: #151515;
-  border: 1px solid #333;
-  border-radius: 4px;
-  padding: 8px;
-  font-family: Consolas, monospace;
-  font-size: 11px;
-  color: #aaa;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
 /* Modal Host */
 #recursion-modal-host {
   position: fixed;
@@ -459,6 +508,8 @@ let currentProgress: RunProgressState = {
   pixels: []
 };
 let availableConnections: Array<{ id: string; name: string; is_default?: boolean }> = [];
+let availableWorldBooks: WorldBookOption[] = [];
+let activeCharacterStatus: CharacterPayloadStatus | null = null;
 
 const panelRoots = new Set<HTMLElement>();
 let inputBarActionHandle: any = null;
@@ -507,8 +558,6 @@ function renderMainPanel(root: HTMLElement) {
     root.innerHTML = `<div class="lr-root"><div style="color:#888;text-align:center;padding:20px;">Connecting to Lumi:REcursion engine...</div></div>`;
     return;
   }
-
-  const activeDeck = currentDecks[currentActiveDeckId] || currentDecks[DEFAULT_DECK_ID];
 
   // 1. Root container
   root.innerHTML = '';
@@ -602,7 +651,7 @@ function renderMainPanel(root: HTMLElement) {
   const heroHeader = document.createElement('div');
   heroHeader.className = 'lr-hero-header';
   heroHeader.innerHTML = `
-    <span><strong>Turn Reasoner</strong></span>
+    <span><strong>Turn Reasoner</strong> · <span style="color:#65d6e8">${currentSettings.cardSourceMode.toUpperCase()}</span></span>
     <span>${currentProgress.phase.toUpperCase()}</span>
   `;
   heroPanel.appendChild(heroHeader);
@@ -618,7 +667,6 @@ function renderMainPanel(root: HTMLElement) {
       heroPixels.appendChild(pix);
     }
   } else {
-    // Render quiet standby blocks
     for (let i = 0; i < 6; i++) {
       const pix = document.createElement('div');
       pix.className = 'lr-pixel';
@@ -635,7 +683,347 @@ function renderMainPanel(root: HTMLElement) {
   }
   container.appendChild(heroPanel);
 
-  // 4. Last Brief Accordion
+  // 4. Source Mode Selector (Option A vs Option B vs Local Decks)
+  const sourceSegmentPanel = document.createElement('div');
+  sourceSegmentPanel.className = 'lr-source-segments';
+
+  const modes: Array<{ id: CardSourceMode; label: string; icon: string }> = [
+    { id: 'world_book', label: 'Option A: World Book', icon: BOOK_ICON_SVG },
+    { id: 'character_ext', label: 'Option B: Character', icon: USER_ICON_SVG },
+    { id: 'local_deck', label: 'Local Decks', icon: DUPLICATE_ICON_SVG }
+  ];
+
+  for (const m of modes) {
+    const btn = document.createElement('button');
+    btn.className = `lr-source-btn ${currentSettings.cardSourceMode === m.id ? 'active' : ''}`;
+    btn.innerHTML = `${m.icon} ${m.label}`;
+    btn.onclick = () => {
+      currentSettings!.cardSourceMode = m.id;
+      hostCtx?.sendToBackend({ type: 'UPDATE_SETTINGS', settings: { cardSourceMode: m.id } });
+      renderAllPanels();
+    };
+    sourceSegmentPanel.appendChild(btn);
+  }
+  container.appendChild(sourceSegmentPanel);
+
+  // 5. Source-Specific Management Panel
+  if (currentSettings.cardSourceMode === 'world_book') {
+    // ── Option A: World Book Panel ──
+    const wbPanel = document.createElement('div');
+    wbPanel.className = 'lr-panel';
+
+    const wbHeader = document.createElement('div');
+    wbHeader.className = 'lr-panel-header';
+    wbHeader.innerHTML = `<span>📖 Option A: World Book Card Definitions</span>`;
+    wbPanel.appendChild(wbHeader);
+
+    const wbBody = document.createElement('div');
+    wbBody.className = 'lr-panel-body';
+
+    const infoBox = document.createElement('div');
+    infoBox.className = 'lr-info-box';
+    infoBox.innerHTML = `
+      🐭 <strong>World Book Mode:</strong> Cards are stored as native entries inside a Lumiverse World Book.
+      Both you and assistant personas (like Mousepad) can view, edit, enable/disable, or create new cards natively in the World Books manager.
+    `;
+    wbBody.appendChild(infoBox);
+
+    const selectRow = document.createElement('div');
+    selectRow.className = 'lr-deck-bar';
+
+    const wbSelect = document.createElement('select');
+    wbSelect.className = 'lr-select';
+    const defWbOpt = document.createElement('option');
+    defWbOpt.value = '';
+    defWbOpt.textContent = 'Auto-detect "Lumi:REcursion Cards" or attached book';
+    wbSelect.appendChild(defWbOpt);
+
+    for (const b of availableWorldBooks) {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = `${b.name}${b.entryCount !== undefined ? ` (${b.entryCount} entries)` : ''}`;
+      opt.selected = b.id === currentSettings.worldBookId;
+      wbSelect.appendChild(opt);
+    }
+    wbSelect.onchange = () => {
+      currentSettings!.worldBookId = wbSelect.value;
+      hostCtx?.sendToBackend({ type: 'UPDATE_SETTINGS', settings: { worldBookId: wbSelect.value } });
+    };
+    selectRow.appendChild(wbSelect);
+
+    const syncBtn = document.createElement('button');
+    syncBtn.className = 'lr-btn lr-btn-primary';
+    syncBtn.innerHTML = `${SPARKLE_ICON_SVG} Sync / Create Book`;
+    syncBtn.title = 'Creates or updates the "Lumi:REcursion Cards" World Book with all 11 canonical card families and attaches to active character';
+    syncBtn.onclick = () => {
+      hostCtx?.sendToBackend({ type: 'CREATE_OR_SYNC_WORLD_BOOK' });
+    };
+    selectRow.appendChild(syncBtn);
+
+    wbBody.appendChild(selectRow);
+    wbPanel.appendChild(wbBody);
+    container.appendChild(wbPanel);
+  } else if (currentSettings.cardSourceMode === 'character_ext') {
+    // ── Option B: Character Extension Payload Panel ──
+    const charPanel = document.createElement('div');
+    charPanel.className = 'lr-panel';
+
+    const charHeader = document.createElement('div');
+    charHeader.className = 'lr-panel-header';
+    charHeader.innerHTML = `<span>👤 Option B: Character Card Payload</span>`;
+    charPanel.appendChild(charHeader);
+
+    const charBody = document.createElement('div');
+    charBody.className = 'lr-panel-body';
+
+    const infoBox = document.createElement('div');
+    infoBox.className = 'lr-info-box';
+    infoBox.innerHTML = `
+      🐭 <strong>Character Payload Mode:</strong> Cards are saved directly into <code>character.extensions.lumi_recursion</code>.
+      This binds the card set to the specific character card. Assistants in chat can inspect and edit cards via <code>set</code>.
+    `;
+    charBody.appendChild(infoBox);
+
+    if (activeCharacterStatus) {
+      const charBar = document.createElement('div');
+      charBar.className = 'lr-deck-bar';
+
+      const statusSpan = document.createElement('div');
+      statusSpan.style.flex = '1';
+      statusSpan.style.fontSize = '12px';
+      statusSpan.innerHTML = `Active: <strong>${activeCharacterStatus.name}</strong> · ${activeCharacterStatus.hasPayload ? `<span style="color:#7fcf8a">${activeCharacterStatus.cardCount} cards loaded</span>` : '<span style="color:#ffd479">No payload yet</span>'}`;
+      charBar.appendChild(statusSpan);
+
+      const initBtn = document.createElement('button');
+      initBtn.className = 'lr-btn lr-btn-primary';
+      initBtn.innerHTML = `${SPARKLE_ICON_SVG} Initialize / Reset Cards`;
+      initBtn.onclick = () => {
+        hostCtx?.sendToBackend({ type: 'INIT_CHARACTER_PAYLOAD' });
+      };
+      charBar.appendChild(initBtn);
+      charBody.appendChild(charBar);
+
+      // Render character cards if available
+      if (activeCharacterStatus.cards && activeCharacterStatus.cards.length > 0) {
+        const cardsDiv = document.createElement('div');
+        cardsDiv.className = 'lr-category-cards';
+        cardsDiv.style.border = '1px solid #333';
+        cardsDiv.style.borderRadius = '5px';
+
+        for (const card of activeCharacterStatus.cards) {
+          const row = document.createElement('div');
+          row.className = 'lr-card-row';
+
+          const info = document.createElement('div');
+          info.className = 'lr-card-info';
+          info.innerHTML = `
+            <div class="lr-card-name">${card.name || card.family}</div>
+            <div class="lr-card-desc">${card.description}</div>
+          `;
+          row.appendChild(info);
+
+          const pill = document.createElement('div');
+          pill.className = `lr-card-pill state-${card.selectionState}`;
+          pill.textContent = card.selectionState.toUpperCase();
+          pill.onclick = () => {
+            const next = cycleCardState(card.id, card.selectionState, currentSettings!.mode);
+            card.selectionState = next;
+            pill.className = `lr-card-pill state-${next}`;
+            pill.textContent = next.toUpperCase();
+            hostCtx?.sendToBackend({
+              type: 'UPDATE_CHARACTER_CARD_STATE',
+              cardId: card.id,
+              state: next
+            });
+          };
+          row.appendChild(pill);
+          cardsDiv.appendChild(row);
+        }
+        charBody.appendChild(cardsDiv);
+      }
+    } else {
+      const emptyDiv = document.createElement('div');
+      emptyDiv.style.color = '#888';
+      emptyDiv.style.padding = '8px 0';
+      emptyDiv.textContent = 'No active character selected in chat. Open a chat with a character to inspect or initialize their payload.';
+      charBody.appendChild(emptyDiv);
+    }
+
+    charPanel.appendChild(charBody);
+    container.appendChild(charPanel);
+  } else {
+    // ── Local Decks Mode Panel ──
+    const activeDeck = currentDecks[currentActiveDeckId] || currentDecks[DEFAULT_DECK_ID];
+    const deckPanel = document.createElement('div');
+    deckPanel.className = 'lr-panel';
+
+    const deckHeader = document.createElement('div');
+    deckHeader.className = 'lr-panel-header';
+    deckHeader.innerHTML = `<span>🃏 Local Extension Decks</span>`;
+    deckPanel.appendChild(deckHeader);
+
+    const deckBody = document.createElement('div');
+    deckBody.className = 'lr-panel-body';
+
+    const deckBar = document.createElement('div');
+    deckBar.className = 'lr-deck-bar';
+
+    const deckSelect = document.createElement('select');
+    deckSelect.className = 'lr-select';
+    for (const [id, d] of Object.entries(currentDecks)) {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = `${d.name}${d.bundled ? ' (Bundled)' : ''}`;
+      opt.selected = id === currentActiveDeckId;
+      deckSelect.appendChild(opt);
+    }
+    deckSelect.onchange = () => {
+      hostCtx?.sendToBackend({ type: 'SWITCH_DECK', deckId: deckSelect.value });
+    };
+    deckBar.appendChild(deckSelect);
+
+    const dupBtn = document.createElement('button');
+    dupBtn.className = 'lr-btn';
+    dupBtn.innerHTML = `${DUPLICATE_ICON_SVG} Copy`;
+    dupBtn.title = 'Duplicate current deck to make an editable copy';
+    dupBtn.onclick = () => {
+      const cur = currentDecks[currentActiveDeckId];
+      const newName = prompt('Enter name for the duplicated deck:', `${cur?.name || 'Deck'} (Copy)`);
+      if (newName) {
+        hostCtx?.sendToBackend({
+          type: 'DUPLICATE_DECK',
+          sourceDeckId: currentActiveDeckId,
+          newName
+        });
+      }
+    };
+    deckBar.appendChild(dupBtn);
+
+    if (activeDeck && !activeDeck.bundled) {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'lr-btn';
+      delBtn.style.color = '#ff8a8a';
+      delBtn.innerHTML = `${TRASH_ICON_SVG}`;
+      delBtn.title = 'Delete custom deck';
+      delBtn.onclick = () => {
+        const confirmText = prompt(`Type "delete" to confirm deleting deck "${activeDeck.name}":`);
+        if (confirmText && confirmText.toLowerCase() === 'delete') {
+          hostCtx?.sendToBackend({ type: 'DELETE_DECK', deckId: activeDeck.id });
+        }
+      };
+      deckBar.appendChild(delBtn);
+    }
+
+    deckBody.appendChild(deckBar);
+
+    // Categories and Cards
+    if (activeDeck) {
+      for (const catId of activeDeck.categoryOrder || []) {
+        const cat = activeDeck.categories[catId];
+        if (!cat) continue;
+
+        const cardIds = activeDeck.cardOrderByCategory[catId] || [];
+        const isOpen = openCategories.has(catId);
+
+        const catDiv = document.createElement('div');
+        catDiv.className = 'lr-category';
+
+        const catHeader = document.createElement('div');
+        catHeader.className = 'lr-category-header';
+
+        const activeCount = cardIds.filter((cid) => {
+          const c = activeDeck.cards[cid];
+          return c && (c.selectionState === 'active' || c.selectionState === 'priority');
+        }).length;
+
+        catHeader.innerHTML = `
+          <span>${isOpen ? '▼' : '▶'} ${cat.name} <span style="font-weight:400;color:#888;font-size:11px;">(${activeCount}/${cardIds.length})</span></span>
+          <div style="display:flex;gap:4px;" onclick="event.stopPropagation()">
+            <button class="lr-btn" style="padding:1px 5px;font-size:10px;" id="cat-all-active-${catId}">All</button>
+            <button class="lr-btn" style="padding:1px 5px;font-size:10px;" id="cat-all-off-${catId}">Off</button>
+          </div>
+        `;
+
+        catHeader.onclick = () => {
+          if (openCategories.has(catId)) openCategories.delete(catId);
+          else openCategories.add(catId);
+          renderAllPanels();
+        };
+
+        const allActiveBtn = catHeader.querySelector(`#cat-all-active-${catId}`) as HTMLElement;
+        if (allActiveBtn) {
+          allActiveBtn.onclick = () => {
+            hostCtx?.sendToBackend({
+              type: 'BULK_SET_CARDS',
+              deckId: activeDeck.id,
+              categoryId: catId,
+              state: 'active'
+            });
+          };
+        }
+
+        const allOffBtn = catHeader.querySelector(`#cat-all-off-${catId}`) as HTMLElement;
+        if (allOffBtn) {
+          allOffBtn.onclick = () => {
+            hostCtx?.sendToBackend({
+              type: 'BULK_SET_CARDS',
+              deckId: activeDeck.id,
+              categoryId: catId,
+              state: 'off'
+            });
+          };
+        }
+
+        catDiv.appendChild(catHeader);
+
+        if (isOpen) {
+          const cardsDiv = document.createElement('div');
+          cardsDiv.className = 'lr-category-cards';
+
+          for (const cid of cardIds) {
+            const card = activeDeck.cards[cid];
+            if (!card) continue;
+
+            const row = document.createElement('div');
+            row.className = 'lr-card-row';
+
+            const info = document.createElement('div');
+            info.className = 'lr-card-info';
+            info.innerHTML = `
+              <div class="lr-card-name">${card.name}</div>
+              <div class="lr-card-desc">${card.description}</div>
+            `;
+            row.appendChild(info);
+
+            const pill = document.createElement('div');
+            pill.className = `lr-card-pill state-${card.selectionState}`;
+            pill.textContent = card.selectionState.toUpperCase();
+            pill.onclick = () => {
+              const next = cycleCardState(card.id, card.selectionState, currentSettings!.mode);
+              card.selectionState = next;
+              pill.className = `lr-card-pill state-${next}`;
+              pill.textContent = next.toUpperCase();
+              hostCtx?.sendToBackend({
+                type: 'SET_CARD_STATE',
+                deckId: activeDeck.id,
+                cardId: card.id,
+                state: next
+              });
+            };
+            row.appendChild(pill);
+            cardsDiv.appendChild(row);
+          }
+          catDiv.appendChild(cardsDiv);
+        }
+        deckBody.appendChild(catDiv);
+      }
+    }
+
+    deckPanel.appendChild(deckBody);
+    container.appendChild(deckPanel);
+  }
+
+  // 6. Last Brief Accordion
   if (lastBrief) {
     const briefPanel = document.createElement('div');
     briefPanel.className = 'lr-panel';
@@ -690,182 +1078,7 @@ function renderMainPanel(root: HTMLElement) {
     container.appendChild(briefPanel);
   }
 
-  // 5. Pre-Process Decks & Category Accordion
-  const deckPanel = document.createElement('div');
-  deckPanel.className = 'lr-panel';
-
-  const deckHeader = document.createElement('div');
-  deckHeader.className = 'lr-panel-header';
-  deckHeader.innerHTML = `<span>🃏 Pre-Process Card Decks</span>`;
-  deckPanel.appendChild(deckHeader);
-
-  const deckBody = document.createElement('div');
-  deckBody.className = 'lr-panel-body';
-
-  // Deck selector bar
-  const deckBar = document.createElement('div');
-  deckBar.className = 'lr-deck-bar';
-
-  const deckSelect = document.createElement('select');
-  deckSelect.className = 'lr-select';
-  for (const [id, d] of Object.entries(currentDecks)) {
-    const opt = document.createElement('option');
-    opt.value = id;
-    opt.textContent = `${d.name}${d.bundled ? ' (Bundled)' : ''}`;
-    opt.selected = id === currentActiveDeckId;
-    deckSelect.appendChild(opt);
-  }
-  deckSelect.onchange = () => {
-    hostCtx?.sendToBackend({ type: 'SWITCH_DECK', deckId: deckSelect.value });
-  };
-  deckBar.appendChild(deckSelect);
-
-  // Duplicate Deck button
-  const dupBtn = document.createElement('button');
-  dupBtn.className = 'lr-btn';
-  dupBtn.innerHTML = `${DUPLICATE_ICON_SVG} Copy`;
-  dupBtn.title = 'Duplicate current deck to make an editable copy';
-  dupBtn.onclick = () => {
-    const cur = currentDecks[currentActiveDeckId];
-    const newName = prompt('Enter name for the duplicated deck:', `${cur?.name || 'Deck'} (Copy)`);
-    if (newName) {
-      hostCtx?.sendToBackend({
-        type: 'DUPLICATE_DECK',
-        sourceDeckId: currentActiveDeckId,
-        newName
-      });
-    }
-  };
-  deckBar.appendChild(dupBtn);
-
-  // Delete Deck button if custom
-  if (activeDeck && !activeDeck.bundled) {
-    const delBtn = document.createElement('button');
-    delBtn.className = 'lr-btn';
-    delBtn.style.color = '#ff8a8a';
-    delBtn.innerHTML = `${TRASH_ICON_SVG}`;
-    delBtn.title = 'Delete custom deck';
-    delBtn.onclick = () => {
-      const confirmText = prompt(`Type "delete" to confirm deleting deck "${activeDeck.name}":`);
-      if (confirmText && confirmText.toLowerCase() === 'delete') {
-        hostCtx?.sendToBackend({ type: 'DELETE_DECK', deckId: activeDeck.id });
-      }
-    };
-    deckBar.appendChild(delBtn);
-  }
-
-  deckBody.appendChild(deckBar);
-
-  // Render Categories & Cards
-  if (activeDeck) {
-    for (const catId of activeDeck.categoryOrder || []) {
-      const cat = activeDeck.categories[catId];
-      if (!cat) continue;
-
-      const cardIds = activeDeck.cardOrderByCategory[catId] || [];
-      const isOpen = openCategories.has(catId);
-
-      const catDiv = document.createElement('div');
-      catDiv.className = 'lr-category';
-
-      const catHeader = document.createElement('div');
-      catHeader.className = 'lr-category-header';
-
-      const activeCount = cardIds.filter((cid) => {
-        const c = activeDeck.cards[cid];
-        return c && (c.selectionState === 'active' || c.selectionState === 'priority');
-      }).length;
-
-      catHeader.innerHTML = `
-        <span>${isOpen ? '▼' : '▶'} ${cat.name} <span style="font-weight:400;color:#888;font-size:11px;">(${activeCount}/${cardIds.length})</span></span>
-        <div style="display:flex;gap:4px;" onclick="event.stopPropagation()">
-          <button class="lr-btn" style="padding:1px 5px;font-size:10px;" id="cat-all-active-${catId}">All</button>
-          <button class="lr-btn" style="padding:1px 5px;font-size:10px;" id="cat-all-off-${catId}">Off</button>
-        </div>
-      `;
-
-      catHeader.onclick = () => {
-        if (openCategories.has(catId)) openCategories.delete(catId);
-        else openCategories.add(catId);
-        renderAllPanels();
-      };
-
-      const allActiveBtn = catHeader.querySelector(`#cat-all-active-${catId}`) as HTMLElement;
-      if (allActiveBtn) {
-        allActiveBtn.onclick = () => {
-          hostCtx?.sendToBackend({
-            type: 'BULK_SET_CARDS',
-            deckId: activeDeck.id,
-            categoryId: catId,
-            state: 'active'
-          });
-        };
-      }
-
-      const allOffBtn = catHeader.querySelector(`#cat-all-off-${catId}`) as HTMLElement;
-      if (allOffBtn) {
-        allOffBtn.onclick = () => {
-          hostCtx?.sendToBackend({
-            type: 'BULK_SET_CARDS',
-            deckId: activeDeck.id,
-            categoryId: catId,
-            state: 'off'
-          });
-        };
-      }
-
-      catDiv.appendChild(catHeader);
-
-      if (isOpen) {
-        const cardsDiv = document.createElement('div');
-        cardsDiv.className = 'lr-category-cards';
-
-        for (const cid of cardIds) {
-          const card = activeDeck.cards[cid];
-          if (!card) continue;
-
-          const row = document.createElement('div');
-          row.className = 'lr-card-row';
-
-          const info = document.createElement('div');
-          info.className = 'lr-card-info';
-          info.innerHTML = `
-            <div class="lr-card-name">${card.name}</div>
-            <div class="lr-card-desc">${card.description}</div>
-          `;
-          row.appendChild(info);
-
-          const pill = document.createElement('div');
-          pill.className = `lr-card-pill state-${card.selectionState}`;
-          pill.textContent = card.selectionState.toUpperCase();
-          pill.title = 'Click to cycle state: Off -> Active -> Priority';
-          pill.onclick = () => {
-            const next = cycleCardState(card.id, card.selectionState, currentSettings!.mode);
-            card.selectionState = next;
-            pill.className = `lr-card-pill state-${next}`;
-            pill.textContent = next.toUpperCase();
-            hostCtx?.sendToBackend({
-              type: 'SET_CARD_STATE',
-              deckId: activeDeck.id,
-              cardId: card.id,
-              state: next
-            });
-          };
-          row.appendChild(pill);
-
-          cardsDiv.appendChild(row);
-        }
-        catDiv.appendChild(cardsDiv);
-      }
-
-      deckBody.appendChild(catDiv);
-    }
-  }
-
-  deckPanel.appendChild(deckBody);
-  container.appendChild(deckPanel);
-
-  // 6. Settings Quick Link / Advanced Disclosure
+  // 7. Settings Quick Link / Advanced Disclosure
   const settingsPanel = document.createElement('div');
   settingsPanel.className = 'lr-panel';
 
@@ -994,6 +1207,7 @@ export async function setup(ctx: any): Promise<() => void> {
       if (drawerHandle.root) {
         panelRoots.add(drawerHandle.root);
       }
+      ctx.sendToBackend({ type: 'GET_STATE' });
       renderAllPanels();
     });
   }
@@ -1019,6 +1233,7 @@ export async function setup(ctx: any): Promise<() => void> {
         if (settingsHandle.root) {
           panelRoots.add(settingsHandle.root);
         }
+        ctx.sendToBackend({ type: 'GET_STATE' });
         renderAllPanels();
       });
     }
@@ -1053,6 +1268,8 @@ export async function setup(ctx: any): Promise<() => void> {
         lastBrief = msg.lastBrief;
         currentProgress = msg.progress;
         availableConnections = msg.connections || [];
+        availableWorldBooks = msg.worldBooks || [];
+        activeCharacterStatus = msg.characterStatus || null;
         updateInputBarLabel();
         renderAllPanels();
         break;
@@ -1086,6 +1303,21 @@ export async function setup(ctx: any): Promise<() => void> {
 
       case 'CONNECTIONS': {
         availableConnections = msg.connections || [];
+        renderAllPanels();
+        break;
+      }
+
+      case 'WORLD_BOOKS_UPDATED': {
+        availableWorldBooks = msg.worldBooks || [];
+        if (currentSettings) {
+          currentSettings.worldBookId = msg.selectedId;
+        }
+        renderAllPanels();
+        break;
+      }
+
+      case 'CHARACTER_STATUS_UPDATED': {
+        activeCharacterStatus = msg.status;
         renderAllPanels();
         break;
       }

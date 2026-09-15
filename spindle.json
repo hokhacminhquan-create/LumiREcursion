@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Lumi:REcursion",
   "identifier": "lumi_recursion",
   "author": "Antigravity & LOQ",
@@ -10,6 +10,7 @@
     "ui_panels",
     "chats",
     "characters",
+    "world_books",
     "chat_mutation"
   ],
   "entry_backend": "dist/backend.js",

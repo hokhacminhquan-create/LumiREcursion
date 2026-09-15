@@ -10,6 +10,8 @@ export const DEFAULT_SETTINGS: RecursionSettings = {
   enabled: true,
   mode: 'auto',
   pipeline: 'segmented',
+  cardSourceMode: 'world_book',
+  worldBookId: '',
   promptFootprint: 'normal',
   connectionProfileId: '',
   storyForm: {

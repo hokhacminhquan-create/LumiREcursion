@@ -4,6 +4,7 @@
  */
 
 export type CardSelectionState = 'off' | 'active' | 'priority';
+export type CardSourceMode = 'world_book' | 'character_ext' | 'local_deck';
 
 export interface CardDefinition {
   id: string;
@@ -54,6 +55,8 @@ export interface RecursionSettings {
   enabled: boolean;
   mode: 'auto' | 'manual';
   pipeline: 'segmented' | 'fused';
+  cardSourceMode: CardSourceMode;
+  worldBookId: string;
   promptFootprint: 'compact' | 'normal' | 'rich';
   connectionProfileId: string;
   storyForm: StoryFormSettings;
@@ -116,6 +119,39 @@ export interface RunProgressState {
   currentStepText?: string;
 }
 
+export interface CharacterPayloadCard {
+  id: string;
+  family: string;
+  name: string;
+  role: string;
+  priority: number;
+  selectionState: CardSelectionState;
+  description: string;
+  promptText?: string;
+  subItems?: string[];
+}
+
+export interface CharacterExtensionData {
+  version: number;
+  enabled: boolean;
+  pipeline?: 'segmented' | 'fused';
+  cards: CharacterPayloadCard[];
+}
+
+export interface WorldBookOption {
+  id: string;
+  name: string;
+  entryCount?: number;
+}
+
+export interface CharacterPayloadStatus {
+  id: string;
+  name: string;
+  hasPayload: boolean;
+  cardCount: number;
+  cards?: CharacterPayloadCard[];
+}
+
 // ─── IPC Payloads ────────────────────────────────────────────────────────────
 
 export type FrontendToBackendMessage =
@@ -128,7 +164,10 @@ export type FrontendToBackendMessage =
   | { type: 'DELETE_DECK'; deckId: string }
   | { type: 'CLEAR_CACHE' }
   | { type: 'MANUAL_RUN_NOW' }
-  | { type: 'GET_CONNECTIONS' };
+  | { type: 'GET_CONNECTIONS' }
+  | { type: 'CREATE_OR_SYNC_WORLD_BOOK' }
+  | { type: 'INIT_CHARACTER_PAYLOAD' }
+  | { type: 'UPDATE_CHARACTER_CARD_STATE'; cardId: string; state: CardSelectionState };
 
 export type BackendToFrontendMessage =
   | {
@@ -139,9 +178,13 @@ export type BackendToFrontendMessage =
       lastBrief: TurnBrief | null;
       progress: RunProgressState;
       connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }>;
+      worldBooks: WorldBookOption[];
+      characterStatus: CharacterPayloadStatus | null;
     }
   | { type: 'PROGRESS'; progress: RunProgressState }
   | { type: 'BRIEF_UPDATED'; brief: TurnBrief }
   | { type: 'SETTINGS_UPDATED'; settings: RecursionSettings }
   | { type: 'DECKS_UPDATED'; decks: Record<string, DeckDefinition>; activeDeckId: string }
-  | { type: 'CONNECTIONS'; connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }> };
+  | { type: 'CONNECTIONS'; connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }> }
+  | { type: 'WORLD_BOOKS_UPDATED'; worldBooks: WorldBookOption[]; selectedId: string }
+  | { type: 'CHARACTER_STATUS_UPDATED'; status: CharacterPayloadStatus | null };
