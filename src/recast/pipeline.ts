@@ -22,6 +22,11 @@ function cleanModelOutput(text: string): string {
     cleaned = cleaned.replace(/<\/?text_to_transform>/gi, '').trim();
   }
 
+  // Strip wrapping markdown code blocks if the model enclosed the entire reply
+  if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
+    cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '').trim();
+  }
+
   return cleaned;
 }
 
@@ -31,7 +36,8 @@ export async function runSinglePass(
   textToTransform: string,
   chatId: string,
   targetMessageId?: string,
-  userId?: string
+  userId?: string,
+  defaultConnectionId?: string
 ): Promise<string> {
   if (!pass.enabled) return textToTransform;
 
@@ -44,11 +50,11 @@ export async function runSinglePass(
       let charId: string | null = null;
       if (chatId && sp?.chats?.get) {
         const chat = await sp.chats.get(chatId, userId);
-        charId = chat?.characterId || chat?.character_id || null;
+        charId = chat?.character_id || chat?.characterId || null;
       }
       if (!charId && sp?.chats?.getActive) {
         const activeChat = await sp.chats.getActive(userId);
-        charId = activeChat?.characterId || activeChat?.character_id || null;
+        charId = activeChat?.character_id || activeChat?.characterId || null;
       }
 
       if (charId) {
@@ -109,7 +115,6 @@ export async function runSinglePass(
         const books = await sp.world_books.list(userId ? { userId } : undefined);
         const bookList = Array.isArray(books) ? books : books?.data || [];
         if (bookList.length > 0) {
-          // Check for attached world books or active books
           const firstBook = await sp.world_books.get(bookList[0].id, userId);
           if (firstBook && Array.isArray(firstBook.entries)) {
             const snippet = firstBook.entries
@@ -149,7 +154,31 @@ export async function runSinglePass(
     });
   }
 
-  // 5. Execute LLM Call via Spindle
+  // 5. Resolve Connection Profile & Model
+  let selectedConn: any = null;
+  if (sp?.connections?.list) {
+    try {
+      const conns = await sp.connections.list(userId);
+      const connList = Array.isArray(conns) ? conns : conns?.data || [];
+      if (connList.length > 0) {
+        if (pass.connection) {
+          selectedConn = connList.find((c: any) => c.id === pass.connection);
+        }
+        if (!selectedConn && defaultConnectionId) {
+          selectedConn = connList.find((c: any) => c.id === defaultConnectionId);
+        }
+        if (!selectedConn) {
+          selectedConn = connList.find((c: any) => c.is_default);
+        }
+        if (!selectedConn) {
+          selectedConn = connList[0];
+        }
+      }
+    } catch (err) {
+      console.warn('[Lumi:REcursion:Recast] Failed to query connection profiles:', err);
+    }
+  }
+
   const genPayload: any = {
     type: 'raw',
     messages,
@@ -159,9 +188,28 @@ export async function runSinglePass(
     ...(userId ? { userId } : {})
   };
 
-  if (pass.connection) {
+  if (selectedConn) {
+    genPayload.connection_id = selectedConn.id;
+    if (selectedConn.model) {
+      genPayload.model = selectedConn.model;
+    }
+    if (selectedConn.provider) {
+      genPayload.provider = selectedConn.provider;
+    }
+  } else if (pass.connection) {
     genPayload.connection_id = pass.connection;
+  } else if (defaultConnectionId) {
+    genPayload.connection_id = defaultConnectionId;
+  } else {
+    throw new Error('No AI connection found. Please configure a connection profile in Lumiverse.');
   }
+
+  console.log(
+    `[Lumi:REcursion:Recast] Pass "${pass.name}" dispatching to connection:`,
+    genPayload.connection_id,
+    'model:',
+    genPayload.model || '(default)'
+  );
 
   const rawRes = await sp.generate.raw(genPayload);
 
@@ -183,25 +231,31 @@ export async function runRecastPipeline(
     messageId: string;
     rawText: string;
     settings: RecastSettings;
+    defaultConnectionId?: string;
     userId?: string;
     onProgress?: (progress: RecastProgress) => void;
   }
 ): Promise<RecastDiffData | null> {
-  const { chatId, messageId, rawText, settings, userId, onProgress } = options;
+  const { chatId, messageId, rawText, settings, defaultConnectionId, userId, onProgress } = options;
 
   if (!rawText || rawText.trim().length === 0) return null;
 
   const activePreset =
     settings.presets.find((p) => p.id === settings.activePresetId) || settings.presets[0];
-  if (!activePreset) return null;
+  if (!activePreset) {
+    throw new Error('No active Recast preset found.');
+  }
 
   const enabledPasses = activePreset.passes.filter((p) => p.enabled);
-  if (enabledPasses.length === 0) return null;
+  if (enabledPasses.length === 0) {
+    throw new Error('All passes in the active Recast preset are disabled. Please enable at least one pass.');
+  }
 
   const tStart = Date.now();
   let currentText = rawText;
   const snapshots: string[] = [rawText];
   const passNames: string[] = [];
+  const errors: Array<{ passName: string; error: string }> = [];
 
   for (let i = 0; i < enabledPasses.length; i++) {
     const pass = enabledPasses[i];
@@ -216,14 +270,30 @@ export async function runRecastPipeline(
     });
 
     try {
-      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId);
+      const passOutput = await runSinglePass(
+        sp,
+        pass,
+        currentText,
+        chatId,
+        messageId,
+        userId,
+        defaultConnectionId
+      );
       currentText = passOutput;
       snapshots.push(currentText);
     } catch (err: any) {
       console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
-      // Preserve current text on error and keep going
+      const errMsg = err?.message || String(err);
+      errors.push({ passName: pass.name, error: errMsg });
+      sp?.toast?.error?.(`Pass "${pass.name}" failed: ${errMsg}`);
       snapshots.push(currentText);
     }
+  }
+
+  if (errors.length > 0 && errors.length === enabledPasses.length) {
+    throw new Error(
+      `All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join('; ')}`
+    );
   }
 
   const totalLatencyMs = Date.now() - tStart;

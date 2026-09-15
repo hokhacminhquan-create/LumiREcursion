@@ -298,6 +298,7 @@ async function resolveTurnCards(
           messageId: payload.messageId,
           rawText: payload.content,
           settings: recastSettings,
+          defaultConnectionId: settings.connectionProfileId,
           userId: uId,
           onProgress: (prog) => {
             recastProgress = prog;
@@ -945,6 +946,7 @@ async function resolveTurnCards(
             messageId: targetMessageId,
             rawText: targetText,
             settings: recastSettings,
+            defaultConnectionId: settings.connectionProfileId,
             userId: effectiveUserId,
             onProgress: (prog) => {
               recastProgress = prog;

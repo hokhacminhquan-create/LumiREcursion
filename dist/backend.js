@@ -1212,9 +1212,12 @@ function cleanModelOutput(text) {
   } else {
     cleaned = cleaned.replace(/<\/?text_to_transform>/gi, "").trim();
   }
+  if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\n?/, "").replace(/\n?```$/, "").trim();
+  }
   return cleaned;
 }
-async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId) {
+async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId, defaultConnectionId) {
   if (!pass.enabled)
     return textToTransform;
   let systemPrompt = pass.prompt.trim();
@@ -1224,11 +1227,11 @@ async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId,
       let charId = null;
       if (chatId && sp?.chats?.get) {
         const chat = await sp.chats.get(chatId, userId);
-        charId = chat?.characterId || chat?.character_id || null;
+        charId = chat?.character_id || chat?.characterId || null;
       }
       if (!charId && sp?.chats?.getActive) {
         const activeChat = await sp.chats.getActive(userId);
-        charId = activeChat?.characterId || activeChat?.character_id || null;
+        charId = activeChat?.character_id || activeChat?.characterId || null;
       }
       if (charId) {
         const char = await sp.characters.get(charId, userId);
@@ -1331,6 +1334,29 @@ ${textToTransform}
       content: pass.prefill.trim()
     });
   }
+  let selectedConn = null;
+  if (sp?.connections?.list) {
+    try {
+      const conns = await sp.connections.list(userId);
+      const connList = Array.isArray(conns) ? conns : conns?.data || [];
+      if (connList.length > 0) {
+        if (pass.connection) {
+          selectedConn = connList.find((c) => c.id === pass.connection);
+        }
+        if (!selectedConn && defaultConnectionId) {
+          selectedConn = connList.find((c) => c.id === defaultConnectionId);
+        }
+        if (!selectedConn) {
+          selectedConn = connList.find((c) => c.is_default);
+        }
+        if (!selectedConn) {
+          selectedConn = connList[0];
+        }
+      }
+    } catch (err) {
+      console.warn("[Lumi:REcursion:Recast] Failed to query connection profiles:", err);
+    }
+  }
   const genPayload = {
     type: "raw",
     messages,
@@ -1339,9 +1365,22 @@ ${textToTransform}
     },
     ...userId ? { userId } : {}
   };
-  if (pass.connection) {
+  if (selectedConn) {
+    genPayload.connection_id = selectedConn.id;
+    if (selectedConn.model) {
+      genPayload.model = selectedConn.model;
+    }
+    if (selectedConn.provider) {
+      genPayload.provider = selectedConn.provider;
+    }
+  } else if (pass.connection) {
     genPayload.connection_id = pass.connection;
+  } else if (defaultConnectionId) {
+    genPayload.connection_id = defaultConnectionId;
+  } else {
+    throw new Error("No AI connection found. Please configure a connection profile in Lumiverse.");
   }
+  console.log(`[Lumi:REcursion:Recast] Pass "${pass.name}" dispatching to connection:`, genPayload.connection_id, "model:", genPayload.model || "(default)");
   const rawRes = await sp.generate.raw(genPayload);
   let outputText = "";
   if (typeof rawRes === "string") {
@@ -1353,19 +1392,22 @@ ${textToTransform}
   return cleaned && cleaned.length > 0 ? cleaned : textToTransform;
 }
 async function runRecastPipeline(sp, options) {
-  const { chatId, messageId, rawText, settings, userId, onProgress } = options;
+  const { chatId, messageId, rawText, settings, defaultConnectionId, userId, onProgress } = options;
   if (!rawText || rawText.trim().length === 0)
     return null;
   const activePreset = settings.presets.find((p) => p.id === settings.activePresetId) || settings.presets[0];
-  if (!activePreset)
-    return null;
+  if (!activePreset) {
+    throw new Error("No active Recast preset found.");
+  }
   const enabledPasses = activePreset.passes.filter((p) => p.enabled);
-  if (enabledPasses.length === 0)
-    return null;
+  if (enabledPasses.length === 0) {
+    throw new Error("All passes in the active Recast preset are disabled. Please enable at least one pass.");
+  }
   const tStart = Date.now();
   let currentText = rawText;
   const snapshots = [rawText];
   const passNames = [];
+  const errors = [];
   for (let i = 0;i < enabledPasses.length; i++) {
     const pass = enabledPasses[i];
     passNames.push(pass.name);
@@ -1377,13 +1419,19 @@ async function runRecastPipeline(sp, options) {
       statusText: `Running pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`
     });
     try {
-      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId);
+      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId, defaultConnectionId);
       currentText = passOutput;
       snapshots.push(currentText);
     } catch (err) {
       console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
+      const errMsg = err?.message || String(err);
+      errors.push({ passName: pass.name, error: errMsg });
+      sp?.toast?.error?.(`Pass "${pass.name}" failed: ${errMsg}`);
       snapshots.push(currentText);
     }
+  }
+  if (errors.length > 0 && errors.length === enabledPasses.length) {
+    throw new Error(`All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join("; ")}`);
   }
   const totalLatencyMs = Date.now() - tStart;
   onProgress?.({
@@ -1578,6 +1626,7 @@ async function resolveTurnCards(context) {
           messageId: payload.messageId,
           rawText: payload.content,
           settings: recastSettings,
+          defaultConnectionId: settings.connectionProfileId,
           userId: uId,
           onProgress: (prog) => {
             recastProgress = prog;
@@ -2121,6 +2170,7 @@ async function resolveTurnCards(context) {
             messageId: targetMessageId,
             rawText: targetText,
             settings: recastSettings,
+            defaultConnectionId: settings.connectionProfileId,
             userId: effectiveUserId,
             onProgress: (prog) => {
               recastProgress = prog;
