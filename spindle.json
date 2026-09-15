@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "name": "Lumi:REcursion",
+  "identifier": "lumi_recursion",
+  "author": "Antigravity & LOQ",
+  "description": "Scene reasoning and turn-bound card system for Lumiverse. Evaluates motives, constraints, consequences, subtext, and continuity in parallel before generation.",
+  "permissions": [
+    "interceptor",
+    "generation",
+    "ui_panels",
+    "chats",
+    "characters",
+    "chat_mutation"
+  ],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "1.1.0"
+}
