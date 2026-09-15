@@ -1,7 +1,18 @@
 /**
  * Lumi:REcursion — Type Definitions
- * Adapted from SillyTavern Recursion for Lumiverse Spindle
+ * Adapted from SillyTavern Recursion & Recast for Lumiverse Spindle
  */
+
+import type {
+  RecastPass,
+  RecastPreset,
+  RecastSettings,
+  RecastDiffData,
+  RecastProgress,
+  RecastApplyMode
+} from './recast/types';
+
+export * from './recast/types';
 
 export type CardSelectionState = 'off' | 'active' | 'priority';
 export type CardSourceMode = 'world_book' | 'character_ext' | 'local_deck';
@@ -167,7 +178,15 @@ export type FrontendToBackendMessage =
   | { type: 'GET_CONNECTIONS' }
   | { type: 'CREATE_OR_SYNC_WORLD_BOOK' }
   | { type: 'INIT_CHARACTER_PAYLOAD' }
-  | { type: 'UPDATE_CHARACTER_CARD_STATE'; cardId: string; state: CardSelectionState };
+  | { type: 'UPDATE_CHARACTER_CARD_STATE'; cardId: string; state: CardSelectionState }
+  // Recast IPC
+  | { type: 'RECAST_UPDATE_SETTINGS'; settings: Partial<RecastSettings> }
+  | { type: 'RECAST_UPDATE_PRESET'; preset: RecastPreset }
+  | { type: 'RECAST_CREATE_PRESET'; name: string }
+  | { type: 'RECAST_DELETE_PRESET'; presetId: string }
+  | { type: 'RECAST_RESET_PRESET'; presetId?: string }
+  | { type: 'RECAST_RUN_MESSAGE'; chatId?: string; messageId?: string }
+  | { type: 'RECAST_APPLY_RESULT'; chatId: string; messageId: string; text: string; mode: 'replace' | 'swipe' };
 
 export type BackendToFrontendMessage =
   | {
@@ -180,6 +199,8 @@ export type BackendToFrontendMessage =
       connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }>;
       worldBooks: WorldBookOption[];
       characterStatus: CharacterPayloadStatus | null;
+      recastSettings: RecastSettings;
+      recastProgress: RecastProgress | null;
     }
   | { type: 'PROGRESS'; progress: RunProgressState }
   | { type: 'BRIEF_UPDATED'; brief: TurnBrief }
@@ -187,4 +208,9 @@ export type BackendToFrontendMessage =
   | { type: 'DECKS_UPDATED'; decks: Record<string, DeckDefinition>; activeDeckId: string }
   | { type: 'CONNECTIONS'; connections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }> }
   | { type: 'WORLD_BOOKS_UPDATED'; worldBooks: WorldBookOption[]; selectedId: string }
-  | { type: 'CHARACTER_STATUS_UPDATED'; status: CharacterPayloadStatus | null };
+  | { type: 'CHARACTER_STATUS_UPDATED'; status: CharacterPayloadStatus | null }
+  // Recast IPC
+  | { type: 'RECAST_STATE_UPDATED'; settings: RecastSettings; progress: RecastProgress | null }
+  | { type: 'RECAST_PROGRESS'; progress: RecastProgress }
+  | { type: 'RECAST_DIFF_READY'; diff: RecastDiffData }
+  | { type: 'RECAST_APPLIED'; chatId: string; messageId: string; mode: 'replace' | 'swipe' };

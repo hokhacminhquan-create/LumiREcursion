@@ -16,9 +16,16 @@ import type {
   CardSourceMode,
   WorldBookOption,
   CharacterPayloadStatus,
-  BackendToFrontendMessage
+  BackendToFrontendMessage,
+  RecastSettings,
+  RecastProgress,
+  RecastDiffData
 } from './types';
 import { DEFAULT_DECK_ID } from './cards/defaults';
+import { DEFAULT_RECAST_SETTINGS } from './recast/defaults';
+import { RECAST_STYLES } from './recast/styles';
+import { renderRecastPanel } from './recast/recast-panel';
+import { showRecastDiffModal } from './recast/diff-modal';
 
 // SVG Icons adhering to Recursion's technical graphite design
 const RECURSION_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12"/><path d="M12 6a6 6 0 0 1 6 6c0 3.314-2.686 6-6 6s-6-2.686-6-6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>`;
@@ -511,6 +518,10 @@ let availableConnections: Array<{ id: string; name: string; is_default?: boolean
 let availableWorldBooks: WorldBookOption[] = [];
 let activeCharacterStatus: CharacterPayloadStatus | null = null;
 
+let activeNavTab: 'reasoning' | 'recast' = 'reasoning';
+let currentRecastSettings: RecastSettings = { ...DEFAULT_RECAST_SETTINGS };
+let currentRecastProgress: RecastProgress | null = null;
+
 const panelRoots = new Set<HTMLElement>();
 let inputBarActionHandle: any = null;
 
@@ -563,6 +574,42 @@ function renderMainPanel(root: HTMLElement) {
   root.innerHTML = '';
   const container = document.createElement('div');
   container.className = 'lr-root';
+
+  // 1b. Navigation Tabs (Scene Reasoning vs Recast Post-Processing)
+  const navBar = document.createElement('div');
+  navBar.className = 'lr-tab-nav';
+
+  const reasoningTabBtn = document.createElement('button');
+  reasoningTabBtn.className = `lr-tab-btn ${activeNavTab === 'reasoning' ? 'active' : ''}`;
+  reasoningTabBtn.innerHTML = `<span>🧠 Scene Reasoning</span>`;
+  reasoningTabBtn.onclick = () => {
+    activeNavTab = 'reasoning';
+    renderAllPanels();
+  };
+
+  const recastTabBtn = document.createElement('button');
+  recastTabBtn.className = `lr-tab-btn ${activeNavTab === 'recast' ? 'active-recast' : ''}`;
+  recastTabBtn.innerHTML = `<span>✨ Recast Post-Processing</span>`;
+  recastTabBtn.onclick = () => {
+    activeNavTab = 'recast';
+    renderAllPanels();
+  };
+
+  navBar.appendChild(reasoningTabBtn);
+  navBar.appendChild(recastTabBtn);
+  container.appendChild(navBar);
+
+  if (activeNavTab === 'recast') {
+    renderRecastPanel(container, {
+      recastSettings: currentRecastSettings,
+      recastProgress: currentRecastProgress,
+      availableConnections,
+      hostCtx,
+      onRefresh: renderAllPanels
+    });
+    root.appendChild(container);
+    return;
+  }
 
   // 2. Bar (Power toggle, Mode badge, Pipeline badge, Run button)
   const bar = document.createElement('div');
@@ -1181,7 +1228,7 @@ export async function setup(ctx: any): Promise<() => void> {
   hostCtx = ctx;
 
   // 1. Inject global extension styles
-  const removeStyle = ctx.dom.addStyle(STYLES);
+  const removeStyle = ctx.dom.addStyle(STYLES + '\n' + RECAST_STYLES);
 
   // 2. Ensure modal overlay host
   ensureModalHost();
@@ -1270,6 +1317,10 @@ export async function setup(ctx: any): Promise<() => void> {
         availableConnections = msg.connections || [];
         availableWorldBooks = msg.worldBooks || [];
         activeCharacterStatus = msg.characterStatus || null;
+        if (msg.recastSettings) {
+          currentRecastSettings = msg.recastSettings;
+        }
+        currentRecastProgress = msg.recastProgress || null;
         updateInputBarLabel();
         renderAllPanels();
         break;
@@ -1318,6 +1369,29 @@ export async function setup(ctx: any): Promise<() => void> {
 
       case 'CHARACTER_STATUS_UPDATED': {
         activeCharacterStatus = msg.status;
+        renderAllPanels();
+        break;
+      }
+
+      case 'RECAST_STATE_UPDATED': {
+        currentRecastSettings = msg.settings;
+        currentRecastProgress = msg.progress;
+        renderAllPanels();
+        break;
+      }
+
+      case 'RECAST_PROGRESS': {
+        currentRecastProgress = msg.progress;
+        renderAllPanels();
+        break;
+      }
+
+      case 'RECAST_DIFF_READY': {
+        showRecastDiffModal(msg.diff, ctx);
+        break;
+      }
+
+      case 'RECAST_APPLIED': {
         renderAllPanels();
         break;
       }

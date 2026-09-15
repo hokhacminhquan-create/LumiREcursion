@@ -265,6 +265,1396 @@ var CATALOG_BY_ROLE = new Map(CARD_SCOPE_CATALOG.map((c) => [c.role, c]));
 // src/cards/defaults.ts
 var DEFAULT_DECK_ID = "default";
 
+// src/recast/defaults.ts
+var PASS_GROUNDING = {
+  id: "pass_grounding",
+  name: "⛓️ Grounding",
+  enabled: false,
+  contextLength: 3,
+  prompt: `You are a prose editor. Edit <text_to_transform> so it feels rooted in the story's world, consistent with its rules, tone, setting, and the way things work there. Making it feels like it belongs to this specific world. Do not make slop or guesswork.
+Essentially make the text make sense, apply crude logic and reactions from the world, scene and characters.
+You don't have context about the scene, keep that in mind.
+
+When a character announces an action and then immediately executes it or time passes, add one short beat between the two so the reader doesn't feel like they blinked and missed the transition. It can be a reaction, a half-second, anything that confirms time moved.
+
+Return only the rewritten text. No explanations, no notes, no commentary.`,
+  connection: "",
+  injectWorldInfo: true,
+  includeCharCard: true,
+  includeSceneContext: true
+};
+var PASS_VALIDATOR = {
+  id: "pass_validator",
+  name: "✅ Character Behavior Validator",
+  enabled: true,
+  contextLength: 7,
+  prompt: `You are a character consistency editor. Your only job is to fix dialog and actions that are not in character in <text_to_transform>. Do not improve prose. Do not fix grammar. Do not restructure sentences. Keep in mind you may not have received the whole scene context.
+Priority order for character signals: example dialogue > personality traits > general description > scene context.
+
+Fix text if it:
+- Uses phrasing that contradicts the example dialogue voice
+- Has the character act warmer, cooler, more helpful, or more dramatic than the card defines
+- Responds only to the surface of what was said, ignoring what the other character is visibly feeling
+- States emotion directly instead of showing it through behavior or word choice
+- Resolves tension the character would hold
+
+<banned_behaviors>
+Also following are behaviors from characters that should be modified or removed completely:
+- Asking for a compensation, any kind of 'Okay but give me this', should be avoided and exchanged to something else. Compliance is not easily bought.
+- Stiff unexpected behavior from characters. Characters should not stop and ask things if it doesn't fit them or the context.
+</banned_behaviors>
+
+Return only the corrected text. No explanations, no commentary.`,
+  connection: "",
+  injectWorldInfo: false,
+  includeCharCard: true,
+  includeSceneContext: true
+};
+var PASS_PROSE = {
+  id: "pass_prose",
+  name: "✒️ Prose Rhythm",
+  enabled: true,
+  contextLength: 13,
+  prompt: `You are a prose editor. Your only job is to improve how <text_to_transform> reads without changing what it says.
+Rules:
+- Do not change any dialogue. Not a single word.
+- Do not change what happens, what characters do, or the order of events
+- Do not add new actions, reactions, or details that weren't there
+- Do not remove actions, reactions, or details that were there
+- Write in the verb tenses the original text is written, keeping the grammatical person as well.
+- Prioritize avoiding repetition of descriptive words by changing the phrase or removing it altogether
+
+What you may change:
+- Sentence length variation, break up monotonous rhythm, mix short and long
+- Eliminate repeated sentence structures, especially consecutive sentences starting the same way
+- Convert telling to showing, remove emotion labels and replace with physical behavior or action
+- Cut filler phrases that carry no meaning
+- Tighten overly wordy constructions without losing meaning
+- Favor flowing sentences connected by conjunctions over short stopped ones
+- Remove any unnecessary 'waiting' at the end of the dialog, if that wait is already clear by the text or cannot be implemented naturally with something else, then remove it
+
+Use the scene context only to match the established prose tone and style of the exchange. Do not drift from the register already set.
+
+Return only the rewritten text. No explanations, no notes, no commentary.`,
+  connection: "",
+  injectWorldInfo: false,
+  includeCharCard: false,
+  includeSceneContext: true
+};
+var PASS_REPETITION_HAMMER = {
+  id: "pass_repetitionhammer",
+  name: "\uD83D\uDD28 Repetition Hammer",
+  enabled: false,
+  contextLength: 35,
+  prompt: `Simply edit <text_to_transform> and remove all repeated words or dialogs from it.
+
+Rules:
+- Remove only words that are removable
+- Change only if allows the text to still make sense
+- Prioritize removing things seen in the more recent interactions
+
+Return only the rewritten text. No explanations, no notes, no commentary. Think only once to avoid overthinking.`,
+  connection: "",
+  injectWorldInfo: false,
+  includeCharCard: false,
+  includeSceneContext: true
+};
+var DEFAULT_RECAST_PRESET = {
+  id: "default_recast_preset",
+  name: "Canonical Recast Preset",
+  passes: [
+    { ...PASS_GROUNDING },
+    { ...PASS_VALIDATOR },
+    { ...PASS_PROSE },
+    { ...PASS_REPETITION_HAMMER }
+  ]
+};
+var DEFAULT_RECAST_SETTINGS = {
+  enabled: false,
+  autoRun: false,
+  applyMode: "diff",
+  minChars: 30,
+  activePresetId: "default_recast_preset",
+  presets: [DEFAULT_RECAST_PRESET]
+};
+
+// src/recast/styles.ts
+var RECAST_STYLES = `
+/* ── Tab Navigation ── */
+.lr-tab-nav {
+  display: flex;
+  background: #202020;
+  border: 1px solid #383838;
+  border-radius: 6px;
+  padding: 3px;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.lr-tab-btn {
+  flex: 1;
+  text-align: center;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #999;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.lr-tab-btn:hover {
+  background: #282828;
+  color: #eee;
+}
+
+.lr-tab-btn.active {
+  background: rgba(101, 214, 232, 0.15);
+  color: #65d6e8;
+  border-color: #65d6e8;
+}
+
+.lr-tab-btn.active-recast {
+  background: rgba(167, 139, 250, 0.15);
+  color: #a78bfa;
+  border-color: #a78bfa;
+}
+
+/* ── Recast Pass List ── */
+.recast-pass-item {
+  background: #222222;
+  border: 1px solid #353535;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s ease;
+}
+
+.recast-pass-item:hover {
+  border-color: #484848;
+}
+
+.recast-pass-item.disabled {
+  opacity: 0.6;
+}
+
+.recast-pass-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recast-pass-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.recast-pass-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e2e2;
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.recast-pass-name:focus {
+  background: #181818;
+  border-color: #555;
+  outline: none;
+  color: #fff;
+}
+
+.recast-pass-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.recast-btn-icon {
+  background: #2a2a2a;
+  border: 1px solid #3c3c3c;
+  color: #aaa;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.recast-btn-icon:hover {
+  background: #363636;
+  color: #fff;
+  border-color: #555;
+}
+
+.recast-pass-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid #2e2e2e;
+  margin-top: 2px;
+}
+
+.recast-row-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.recast-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.recast-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #bbb;
+  cursor: pointer;
+}
+
+.recast-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #181818;
+  border: 1px solid #383838;
+  color: #ddd;
+  border-radius: 5px;
+  padding: 7px 9px;
+  font-size: 11.5px;
+  font-family: inherit;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 80px;
+  outline: none;
+}
+
+.recast-textarea:focus {
+  border-color: #a78bfa;
+}
+
+/* ── Recast Hero / Progress Bar ── */
+.recast-progress-bar {
+  background: #242424;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recast-pulse {
+  animation: rc-pulse 1.2s infinite alternate;
+}
+
+@keyframes rc-pulse {
+  0% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* ── Interactive Diff Review Modal ── */
+#recast_diff_backdrop {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  animation: rc-fade-in 0.2s ease;
+}
+
+#recast_diff_modal {
+  position: relative;
+  width: 90vw;
+  height: 88vh;
+  max-width: 1400px;
+  background: #1a1a1f;
+  border: 1px solid #3e3e48;
+  border-radius: 10px;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: rc-slide-up 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  color: #dcdcdc;
+  font-family: var(--mainFontFamily, "Noto Sans", -apple-system, sans-serif);
+}
+
+@keyframes rc-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes rc-slide-up {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.rc-diff-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid #33333d;
+  background: #202026;
+  flex-shrink: 0;
+}
+
+.rc-diff-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #eee;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rc-diff-close-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #aaa;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 5px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.rc-diff-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+/* Steps Bar */
+.rc-diff-steps-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 18px;
+  background: #1c1c22;
+  border-bottom: 1px solid #2d2d36;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.rc-diff-step-btn {
+  background: #25252d;
+  border: 1px solid #383842;
+  color: #aaa;
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.rc-diff-step-btn:hover {
+  background: #30303a;
+  color: #eee;
+}
+
+.rc-diff-step-btn.active {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: #a78bfa;
+  color: #c4b5fd;
+}
+
+/* Modal Body */
+.rc-diff-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  padding: 12px 16px;
+  gap: 12px;
+}
+
+.rc-diff-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.rc-diff-panel-header {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 6px 12px;
+  border-radius: 6px 6px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.rc-diff-original-header {
+  background: rgba(220, 60, 60, 0.16);
+  color: #f28b82;
+  border-bottom: 2px solid rgba(220, 60, 60, 0.4);
+}
+
+.rc-diff-transformed-header {
+  background: rgba(50, 200, 100, 0.14);
+  color: #81c995;
+  border-bottom: 2px solid rgba(50, 200, 100, 0.4);
+}
+
+.rc-diff-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: #141418;
+  border: 1px solid #33333e;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #d8d8d8;
+}
+
+.rc-diff-textarea {
+  flex: 1;
+  resize: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.7;
+  padding: 12px 14px;
+  background: #141418 !important;
+  color: #eee !important;
+  border: 1px solid #33333e !important;
+  border-top: none !important;
+  border-radius: 0 0 6px 6px !important;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.rc-diff-textarea:focus {
+  border-color: #a78bfa !important;
+}
+
+/* Diff highlights */
+del.rc-del {
+  background: rgba(220, 50, 50, 0.3);
+  color: #ff9999;
+  text-decoration: line-through;
+  padding: 1px 3px;
+  border-radius: 2px;
+}
+
+ins.rc-ins {
+  background: rgba(50, 190, 100, 0.3);
+  color: #90f0a8;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 1px 3px;
+  border-radius: 2px;
+}
+
+/* Modal Footer */
+.rc-diff-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid #33333d;
+  background: #202026;
+  flex-shrink: 0;
+}
+
+.rc-diff-btn {
+  padding: 7px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.rc-diff-accept-btn {
+  background: rgba(50, 190, 100, 0.2);
+  border: 1px solid rgba(50, 190, 100, 0.5);
+  color: #81c995;
+}
+
+.rc-diff-accept-btn:hover {
+  background: rgba(50, 190, 100, 0.35);
+  color: #fff;
+}
+
+.rc-diff-swipe-btn {
+  background: rgba(167, 139, 250, 0.2);
+  border: 1px solid rgba(167, 139, 250, 0.5);
+  color: #c4b5fd;
+}
+
+.rc-diff-swipe-btn:hover {
+  background: rgba(167, 139, 250, 0.35);
+  color: #fff;
+}
+
+.rc-diff-reject-btn {
+  background: #28282e;
+  border: 1px solid #3e3e48;
+  color: #aaa;
+}
+
+.rc-diff-reject-btn:hover {
+  background: #34343c;
+  color: #eee;
+}
+`;
+
+// src/recast/recast-panel.ts
+var expandedPasses = new Set;
+function renderRecastPanel(container, state) {
+  const { recastSettings, recastProgress, availableConnections, hostCtx, onRefresh } = state;
+  const activePreset = recastSettings.presets.find((p) => p.id === recastSettings.activePresetId) || recastSettings.presets[0];
+  const bar = document.createElement("div");
+  bar.className = "lr-bar";
+  const barLeft = document.createElement("div");
+  barLeft.className = "lr-bar-left";
+  const toggleLabel = document.createElement("label");
+  toggleLabel.className = "lr-toggle";
+  toggleLabel.title = "Toggle Recast post-processing pipeline";
+  const toggleInput = document.createElement("input");
+  toggleInput.type = "checkbox";
+  toggleInput.checked = recastSettings.enabled;
+  toggleInput.onchange = () => {
+    const next = toggleInput.checked;
+    recastSettings.enabled = next;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { enabled: next }
+    });
+    hostCtx?.toast?.info?.(next ? "✨ Recast post-processing enabled" : "✨ Recast disabled");
+    onRefresh();
+  };
+  const toggleSlider = document.createElement("span");
+  toggleSlider.className = "lr-toggle-slider";
+  toggleLabel.appendChild(toggleInput);
+  toggleLabel.appendChild(toggleSlider);
+  barLeft.appendChild(toggleLabel);
+  const titleSpan = document.createElement("span");
+  titleSpan.style.fontWeight = "700";
+  titleSpan.style.fontSize = "12px";
+  titleSpan.style.color = recastSettings.enabled ? "#a78bfa" : "#777";
+  titleSpan.textContent = "Recast Pipeline";
+  barLeft.appendChild(titleSpan);
+  const modeBadge = document.createElement("span");
+  modeBadge.className = "lr-badge";
+  modeBadge.style.color = "#c4b5fd";
+  modeBadge.style.borderColor = "rgba(167, 139, 250, 0.4)";
+  modeBadge.style.background = "rgba(167, 139, 250, 0.15)";
+  modeBadge.textContent = recastSettings.applyMode.toUpperCase();
+  modeBadge.title = `Apply Mode: ${recastSettings.applyMode}`;
+  barLeft.appendChild(modeBadge);
+  bar.appendChild(barLeft);
+  const barRight = document.createElement("div");
+  barRight.className = "lr-bar-right";
+  const runNowBtn = document.createElement("button");
+  runNowBtn.className = "lr-btn lr-btn-primary";
+  runNowBtn.style.background = "rgba(167, 139, 250, 0.2)";
+  runNowBtn.style.borderColor = "#a78bfa";
+  runNowBtn.style.color = "#c4b5fd";
+  runNowBtn.innerHTML = `<span>✨ Recast Latest Message</span>`;
+  runNowBtn.title = "Run the full Recast pipeline on the latest assistant message now";
+  runNowBtn.onclick = () => {
+    hostCtx?.sendToBackend({ type: "RECAST_RUN_MESSAGE" });
+  };
+  barRight.appendChild(runNowBtn);
+  bar.appendChild(barRight);
+  container.appendChild(bar);
+  if (recastProgress && recastProgress.active) {
+    const progBox = document.createElement("div");
+    progBox.className = "recast-progress-bar recast-pulse";
+    progBox.style.borderColor = "#a78bfa";
+    progBox.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="color:#a78bfa;font-weight:700;">⚙️ [Pass ${recastProgress.currentPassIndex}/${recastProgress.totalPasses}]</span>
+        <span style="font-size:12px;color:#eee;">${recastProgress.currentPassName}</span>
+      </div>
+      <span style="font-size:11px;color:#aaa;font-style:italic;">${recastProgress.statusText}</span>
+    `;
+    container.appendChild(progBox);
+  }
+  const settingsPanel = document.createElement("div");
+  settingsPanel.className = "lr-panel";
+  const sHeader = document.createElement("div");
+  sHeader.className = "lr-panel-header";
+  sHeader.innerHTML = `<span>⚙️ Pipeline Mode & Presets</span>`;
+  settingsPanel.appendChild(sHeader);
+  const sBody = document.createElement("div");
+  sBody.className = "lr-panel-body";
+  const row1 = document.createElement("div");
+  row1.className = "recast-row-2col";
+  const modeCol = document.createElement("div");
+  modeCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Apply Mode:</label>`;
+  const modeSelect = document.createElement("select");
+  modeSelect.className = "lr-select";
+  const modes = [
+    { id: "diff", label: "Review in Diff Modal" },
+    { id: "replace", label: "Auto-Replace In-Place" },
+    { id: "swipe", label: "Auto-Add as Swipe" }
+  ];
+  modes.forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.label;
+    opt.selected = m.id === recastSettings.applyMode;
+    modeSelect.appendChild(opt);
+  });
+  modeSelect.onchange = () => {
+    recastSettings.applyMode = modeSelect.value;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { applyMode: modeSelect.value }
+    });
+    onRefresh();
+  };
+  modeCol.appendChild(modeSelect);
+  row1.appendChild(modeCol);
+  const minCharCol = document.createElement("div");
+  minCharCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Min Characters:</label>`;
+  const minCharInput = document.createElement("input");
+  minCharInput.type = "number";
+  minCharInput.className = "lr-select";
+  minCharInput.value = String(recastSettings.minChars ?? 30);
+  minCharInput.min = "0";
+  minCharInput.max = "5000";
+  minCharInput.onchange = () => {
+    const val = parseInt(minCharInput.value, 10) || 0;
+    recastSettings.minChars = val;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { minChars: val }
+    });
+  };
+  minCharCol.appendChild(minCharInput);
+  row1.appendChild(minCharCol);
+  sBody.appendChild(row1);
+  const autoRunLabel = document.createElement("label");
+  autoRunLabel.style.display = "flex";
+  autoRunLabel.style.alignItems = "center";
+  autoRunLabel.style.gap = "6px";
+  autoRunLabel.style.fontSize = "11.5px";
+  autoRunLabel.style.color = "#ccc";
+  autoRunLabel.style.cursor = "pointer";
+  const autoRunCheckbox = document.createElement("input");
+  autoRunCheckbox.type = "checkbox";
+  autoRunCheckbox.checked = recastSettings.autoRun;
+  autoRunCheckbox.onchange = () => {
+    recastSettings.autoRun = autoRunCheckbox.checked;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { autoRun: autoRunCheckbox.checked }
+    });
+  };
+  autoRunLabel.appendChild(autoRunCheckbox);
+  autoRunLabel.appendChild(document.createTextNode("Auto-run Recast pipeline when generation ends"));
+  sBody.appendChild(autoRunLabel);
+  const presetBar = document.createElement("div");
+  presetBar.className = "lr-deck-bar";
+  presetBar.style.marginTop = "4px";
+  const presetSelect = document.createElement("select");
+  presetSelect.className = "lr-select";
+  recastSettings.presets.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = `${p.name} (${p.passes.filter((x) => x.enabled).length}/${p.passes.length} passes)`;
+    opt.selected = p.id === activePreset.id;
+    presetSelect.appendChild(opt);
+  });
+  presetSelect.onchange = () => {
+    recastSettings.activePresetId = presetSelect.value;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { activePresetId: presetSelect.value }
+    });
+    onRefresh();
+  };
+  presetBar.appendChild(presetSelect);
+  const newPresetBtn = document.createElement("button");
+  newPresetBtn.className = "lr-btn";
+  newPresetBtn.textContent = "+ New";
+  newPresetBtn.title = "Create a new preset";
+  newPresetBtn.onclick = () => {
+    const name = prompt("Enter name for the new Recast preset:", "Custom Recast Preset");
+    if (name) {
+      hostCtx?.sendToBackend({ type: "RECAST_CREATE_PRESET", name });
+    }
+  };
+  presetBar.appendChild(newPresetBtn);
+  const resetBtn = document.createElement("button");
+  resetBtn.className = "lr-btn";
+  resetBtn.textContent = "Reset";
+  resetBtn.title = "Reset presets to canonical default";
+  resetBtn.onclick = () => {
+    if (confirm("Reset all Recast presets to canonical defaults?")) {
+      hostCtx?.sendToBackend({ type: "RECAST_RESET_PRESET" });
+    }
+  };
+  presetBar.appendChild(resetBtn);
+  if (recastSettings.presets.length > 1) {
+    const delBtn = document.createElement("button");
+    delBtn.className = "lr-btn";
+    delBtn.style.color = "#ff8a8a";
+    delBtn.textContent = "✕";
+    delBtn.title = "Delete active preset";
+    delBtn.onclick = () => {
+      if (confirm(`Delete preset "${activePreset.name}"?`)) {
+        hostCtx?.sendToBackend({
+          type: "RECAST_DELETE_PRESET",
+          presetId: activePreset.id
+        });
+      }
+    };
+    presetBar.appendChild(delBtn);
+  }
+  sBody.appendChild(presetBar);
+  settingsPanel.appendChild(sBody);
+  container.appendChild(settingsPanel);
+  const passesPanel = document.createElement("div");
+  passesPanel.className = "lr-panel";
+  const passesHeader = document.createElement("div");
+  passesHeader.className = "lr-panel-header";
+  const enabledCount = activePreset.passes.filter((p) => p.enabled).length;
+  passesHeader.innerHTML = `
+    <span>Passes in Preset (${enabledCount}/${activePreset.passes.length} Active)</span>
+  `;
+  const addPassBtn = document.createElement("button");
+  addPassBtn.className = "lr-btn lr-btn-primary";
+  addPassBtn.style.padding = "2px 8px";
+  addPassBtn.style.fontSize = "11px";
+  addPassBtn.textContent = "+ Add Pass";
+  addPassBtn.onclick = (e) => {
+    e.stopPropagation();
+    const newPass = {
+      id: `pass_${Date.now()}`,
+      name: "New Custom Pass",
+      enabled: true,
+      contextLength: 5,
+      prompt: `You are an editor. Edit <text_to_transform> to improve dialogue and character voice.
+Return only the rewritten text.`,
+      connection: "",
+      injectWorldInfo: false,
+      includeCharCard: true,
+      includeSceneContext: true
+    };
+    activePreset.passes.push(newPass);
+    expandedPasses.add(newPass.id);
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_PRESET",
+      preset: activePreset
+    });
+    onRefresh();
+  };
+  passesHeader.appendChild(addPassBtn);
+  passesPanel.appendChild(passesHeader);
+  const passesBody = document.createElement("div");
+  passesBody.className = "lr-panel-body";
+  activePreset.passes.forEach((pass, pIdx) => {
+    const isExpanded = expandedPasses.has(pass.id);
+    const item = document.createElement("div");
+    item.className = `recast-pass-item ${pass.enabled ? "" : "disabled"}`;
+    const headerRow = document.createElement("div");
+    headerRow.className = "recast-pass-header";
+    const titleRow = document.createElement("div");
+    titleRow.className = "recast-pass-title-row";
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.checked = pass.enabled;
+    chk.title = "Enable / Disable this pass";
+    chk.onchange = () => {
+      pass.enabled = chk.checked;
+      hostCtx?.sendToBackend({
+        type: "RECAST_UPDATE_PRESET",
+        preset: activePreset
+      });
+      onRefresh();
+    };
+    titleRow.appendChild(chk);
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "recast-pass-name";
+    nameInput.value = pass.name;
+    nameInput.title = "Click to rename pass";
+    nameInput.onchange = () => {
+      pass.name = nameInput.value.trim() || "Untitled Pass";
+      hostCtx?.sendToBackend({
+        type: "RECAST_UPDATE_PRESET",
+        preset: activePreset
+      });
+    };
+    titleRow.appendChild(nameInput);
+    headerRow.appendChild(titleRow);
+    const ctrlRow = document.createElement("div");
+    ctrlRow.className = "recast-pass-controls";
+    if (pIdx > 0) {
+      const upBtn = document.createElement("button");
+      upBtn.className = "recast-btn-icon";
+      upBtn.innerHTML = "▲";
+      upBtn.title = "Move pass up";
+      upBtn.onclick = () => {
+        const temp = activePreset.passes[pIdx - 1];
+        activePreset.passes[pIdx - 1] = activePreset.passes[pIdx];
+        activePreset.passes[pIdx] = temp;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+        onRefresh();
+      };
+      ctrlRow.appendChild(upBtn);
+    }
+    if (pIdx < activePreset.passes.length - 1) {
+      const downBtn = document.createElement("button");
+      downBtn.className = "recast-btn-icon";
+      downBtn.innerHTML = "▼";
+      downBtn.title = "Move pass down";
+      downBtn.onclick = () => {
+        const temp = activePreset.passes[pIdx + 1];
+        activePreset.passes[pIdx + 1] = activePreset.passes[pIdx];
+        activePreset.passes[pIdx] = temp;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+        onRefresh();
+      };
+      ctrlRow.appendChild(downBtn);
+    }
+    const expandBtn = document.createElement("button");
+    expandBtn.className = "recast-btn-icon";
+    expandBtn.innerHTML = isExpanded ? "Hide" : "Edit";
+    expandBtn.title = "Show / hide pass configuration & prompt";
+    expandBtn.onclick = () => {
+      if (expandedPasses.has(pass.id)) {
+        expandedPasses.delete(pass.id);
+      } else {
+        expandedPasses.add(pass.id);
+      }
+      onRefresh();
+    };
+    ctrlRow.appendChild(expandBtn);
+    const delBtn = document.createElement("button");
+    delBtn.className = "recast-btn-icon";
+    delBtn.style.color = "#ff8a8a";
+    delBtn.innerHTML = "✕";
+    delBtn.title = "Delete pass";
+    delBtn.onclick = () => {
+      if (confirm(`Remove pass "${pass.name}"?`)) {
+        activePreset.passes.splice(pIdx, 1);
+        expandedPasses.delete(pass.id);
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+        onRefresh();
+      }
+    };
+    ctrlRow.appendChild(delBtn);
+    headerRow.appendChild(ctrlRow);
+    item.appendChild(headerRow);
+    if (isExpanded) {
+      const details = document.createElement("div");
+      details.className = "recast-pass-details";
+      const paramRow = document.createElement("div");
+      paramRow.className = "recast-row-2col";
+      const ctxCol = document.createElement("div");
+      ctxCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Context Length (Messages):</label>`;
+      const ctxInput = document.createElement("input");
+      ctxInput.type = "number";
+      ctxInput.className = "lr-select";
+      ctxInput.value = String(pass.contextLength ?? 3);
+      ctxInput.min = "0";
+      ctxInput.max = "100";
+      ctxInput.onchange = () => {
+        pass.contextLength = parseInt(ctxInput.value, 10) || 0;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+      };
+      ctxCol.appendChild(ctxInput);
+      paramRow.appendChild(ctxCol);
+      const connCol = document.createElement("div");
+      connCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Connection Profile:</label>`;
+      const connSelect = document.createElement("select");
+      connSelect.className = "lr-select";
+      const defOpt = document.createElement("option");
+      defOpt.value = "";
+      defOpt.textContent = "Active / Default Profile";
+      connSelect.appendChild(defOpt);
+      availableConnections.forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = `${c.name}${c.is_default ? " (Default)" : ""}`;
+        opt.selected = c.id === pass.connection;
+        connSelect.appendChild(opt);
+      });
+      connSelect.onchange = () => {
+        pass.connection = connSelect.value;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+      };
+      connCol.appendChild(connSelect);
+      paramRow.appendChild(connCol);
+      details.appendChild(paramRow);
+      const injGroup = document.createElement("div");
+      injGroup.className = "recast-checkbox-group";
+      const charLabel = document.createElement("label");
+      charLabel.className = "recast-checkbox-label";
+      const charChk = document.createElement("input");
+      charChk.type = "checkbox";
+      charChk.checked = pass.includeCharCard !== false;
+      charChk.onchange = () => {
+        pass.includeCharCard = charChk.checked;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+      };
+      charLabel.appendChild(charChk);
+      charLabel.appendChild(document.createTextNode("Include Character Card"));
+      injGroup.appendChild(charLabel);
+      const scnLabel = document.createElement("label");
+      scnLabel.className = "recast-checkbox-label";
+      const scnChk = document.createElement("input");
+      scnChk.type = "checkbox";
+      scnChk.checked = pass.includeSceneContext !== false;
+      scnChk.onchange = () => {
+        pass.includeSceneContext = scnChk.checked;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+      };
+      scnLabel.appendChild(scnChk);
+      scnLabel.appendChild(document.createTextNode("Include Scene Context"));
+      injGroup.appendChild(scnLabel);
+      const wiLabel = document.createElement("label");
+      wiLabel.className = "recast-checkbox-label";
+      const wiChk = document.createElement("input");
+      wiChk.type = "checkbox";
+      wiChk.checked = Boolean(pass.injectWorldInfo);
+      wiChk.onchange = () => {
+        pass.injectWorldInfo = wiChk.checked;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+      };
+      wiLabel.appendChild(wiChk);
+      wiLabel.appendChild(document.createTextNode("Inject World Info"));
+      injGroup.appendChild(wiLabel);
+      details.appendChild(injGroup);
+      const promptLabel = document.createElement("label");
+      promptLabel.style.display = "block";
+      promptLabel.style.fontSize = "10.5px";
+      promptLabel.style.color = "#aaa";
+      promptLabel.innerHTML = `Pass Prompt <span style="font-size:10px;color:#a78bfa;">(&lt;text_to_transform&gt; will be injected)</span>:`;
+      details.appendChild(promptLabel);
+      const promptTextarea = document.createElement("textarea");
+      promptTextarea.className = "recast-textarea";
+      promptTextarea.value = pass.prompt;
+      promptTextarea.rows = 5;
+      promptTextarea.onchange = () => {
+        pass.prompt = promptTextarea.value;
+        hostCtx?.sendToBackend({
+          type: "RECAST_UPDATE_PRESET",
+          preset: activePreset
+        });
+      };
+      details.appendChild(promptTextarea);
+      item.appendChild(details);
+    }
+    passesBody.appendChild(item);
+  });
+  passesPanel.appendChild(passesBody);
+  container.appendChild(passesPanel);
+}
+
+// src/recast/diff.ts
+function escapeHtml(str) {
+  if (str === null || str === undefined)
+    return "";
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function tokenize(text) {
+  return text.split(/(\s+)/);
+}
+var MAX_DIFF_TOKENS = 50000;
+function myersDiff(oldTokens, newTokens) {
+  const oldLength = oldTokens.length;
+  const newLength = newTokens.length;
+  const maxTotalLength = oldLength + newLength;
+  const furthestPaths = new Int32Array(2 * maxTotalLength + 1);
+  const pathHistory = [];
+  furthestPaths[maxTotalLength + 1] = 0;
+  for (let editDepth = 0;editDepth <= maxTotalLength; editDepth++) {
+    if (editDepth > 1e4)
+      return null;
+    pathHistory.push(furthestPaths.slice(maxTotalLength - editDepth, maxTotalLength + editDepth + 1));
+    for (let diagonal = -editDepth;diagonal <= editDepth; diagonal += 2) {
+      let oldPos;
+      const goDown = diagonal === -editDepth || diagonal !== editDepth && furthestPaths[maxTotalLength + diagonal - 1] < furthestPaths[maxTotalLength + diagonal + 1];
+      if (goDown) {
+        oldPos = furthestPaths[maxTotalLength + diagonal + 1];
+      } else {
+        oldPos = furthestPaths[maxTotalLength + diagonal - 1] + 1;
+      }
+      let newPos = oldPos - diagonal;
+      while (oldPos < oldLength && newPos < newLength && oldTokens[oldPos] === newTokens[newPos]) {
+        oldPos++;
+        newPos++;
+      }
+      furthestPaths[maxTotalLength + diagonal] = oldPos;
+      if (oldPos >= oldLength && newPos >= newLength) {
+        const ops = [];
+        let currOldPos = oldLength;
+        let currNewPos = newLength;
+        for (let step = editDepth;step > 0; step--) {
+          const historyArray = pathHistory[step];
+          const currDiagonal = currOldPos - currNewPos;
+          const histIndex = step + currDiagonal;
+          const wentDown = currDiagonal === -step || currDiagonal !== step && historyArray[histIndex - 1] < historyArray[histIndex + 1];
+          let startX;
+          if (wentDown) {
+            startX = historyArray[histIndex + 1];
+          } else {
+            startX = historyArray[histIndex - 1] + 1;
+          }
+          const startY = startX - currDiagonal;
+          while (currOldPos > startX && currNewPos > startY && currOldPos > 0 && currNewPos > 0) {
+            ops.unshift({ type: "equal", v: oldTokens[currOldPos - 1] });
+            currOldPos--;
+            currNewPos--;
+          }
+          if (wentDown) {
+            if (currNewPos > 0) {
+              ops.unshift({ type: "insert", v: newTokens[currNewPos - 1] });
+              currNewPos--;
+            }
+          } else {
+            if (currOldPos > 0) {
+              ops.unshift({ type: "delete", v: oldTokens[currOldPos - 1] });
+              currOldPos--;
+            }
+          }
+        }
+        while (currOldPos > 0 && currNewPos > 0) {
+          ops.unshift({ type: "equal", v: oldTokens[currOldPos - 1] });
+          currOldPos--;
+          currNewPos--;
+        }
+        while (currOldPos > 0) {
+          ops.unshift({ type: "delete", v: oldTokens[currOldPos - 1] });
+          currOldPos--;
+        }
+        while (currNewPos > 0) {
+          ops.unshift({ type: "insert", v: newTokens[currNewPos - 1] });
+          currNewPos--;
+        }
+        return ops;
+      }
+    }
+  }
+  return [];
+}
+function computeWordDiff(oldText, newText) {
+  const a = tokenize(oldText);
+  const b = tokenize(newText);
+  if (a.length > MAX_DIFF_TOKENS || b.length > MAX_DIFF_TOKENS) {
+    return { oldHtml: escapeHtml(oldText), newHtml: escapeHtml(newText) };
+  }
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) {
+    start++;
+  }
+  let endA = a.length - 1;
+  let endB = b.length - 1;
+  while (endA >= start && endB >= start && a[endA] === b[endB]) {
+    endA--;
+    endB--;
+  }
+  const subA = a.slice(start, endA + 1);
+  const subB = b.slice(start, endB + 1);
+  let ops = myersDiff(subA, subB);
+  if (!ops) {
+    ops = [
+      ...subA.map((v) => ({ type: "delete", v })),
+      ...subB.map((v) => ({ type: "insert", v }))
+    ];
+  }
+  const fullOps = [
+    ...a.slice(0, start).map((v) => ({ type: "equal", v })),
+    ...ops,
+    ...a.slice(endA + 1).map((v) => ({ type: "equal", v }))
+  ];
+  let oldHtml = "";
+  let newHtml = "";
+  for (const op of fullOps) {
+    if (op.v === undefined || op.v === null)
+      continue;
+    const v = escapeHtml(op.v);
+    if (op.type === "equal") {
+      oldHtml += v;
+      newHtml += v;
+    } else if (op.type === "delete") {
+      oldHtml += `<del class="rc-del">${v}</del>`;
+    } else {
+      newHtml += `<ins class="rc-ins">${v}</ins>`;
+    }
+  }
+  return { oldHtml, newHtml };
+}
+function buildSteps(snapshots, passNames) {
+  if (!snapshots || snapshots.length < 2)
+    return [];
+  const getPassName = (i) => passNames && passNames[i - 1] ? passNames[i - 1] : undefined;
+  const steps = [];
+  steps.push({
+    oldText: snapshots[0],
+    newText: snapshots[snapshots.length - 1],
+    oldLabel: "Original",
+    newLabel: "Final Recast",
+    caption: "Full Pipeline Diff"
+  });
+  for (let i = 0;i < snapshots.length - 1; i++) {
+    steps.push({
+      oldText: snapshots[i],
+      newText: snapshots[i + 1],
+      oldLabel: i === 0 ? "Original" : `Pass ${i}`,
+      newLabel: `Pass ${i + 1}`,
+      caption: i === 0 ? "Original → Pass 1" : `Pass ${i} → Pass ${i + 1}`,
+      passName: getPassName(i + 1)
+    });
+  }
+  return steps;
+}
+
+// src/recast/diff-modal.ts
+var activeBackdropEl = null;
+function closeRecastDiffModal() {
+  if (activeBackdropEl && activeBackdropEl.parentElement) {
+    activeBackdropEl.remove();
+  }
+  activeBackdropEl = null;
+  const host = document.getElementById("recursion-modal-host");
+  if (host) {
+    host.classList.remove("active");
+  }
+}
+function showRecastDiffModal(diff, hostCtx) {
+  closeRecastDiffModal();
+  let host = document.getElementById("recursion-modal-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "recursion-modal-host";
+    document.body.appendChild(host);
+  }
+  host.classList.add("active");
+  const backdrop = document.createElement("div");
+  backdrop.id = "recast_diff_backdrop";
+  activeBackdropEl = backdrop;
+  const modal = document.createElement("div");
+  modal.id = "recast_diff_modal";
+  modal.onclick = (e) => e.stopPropagation();
+  const header = document.createElement("div");
+  header.className = "rc-diff-header";
+  header.innerHTML = `
+    <div class="rc-diff-title">
+      <span>✨ Recast Post-Processing Review</span>
+      <span style="font-size:11px;font-weight:400;color:#999;background:#282832;padding:2px 6px;border-radius:4px;">
+        ${diff.totalLatencyMs}ms · ${diff.passNames.length} pass${diff.passNames.length === 1 ? "" : "es"}
+      </span>
+    </div>
+  `;
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "rc-diff-close-btn";
+  closeBtn.innerHTML = "✕";
+  closeBtn.title = "Close modal";
+  closeBtn.onclick = closeRecastDiffModal;
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+  const steps = buildSteps(diff.snapshots, diff.passNames);
+  let currentStepIdx = 0;
+  let userEditedText = diff.transformedText;
+  const stepsBar = document.createElement("div");
+  stepsBar.className = "rc-diff-steps-bar";
+  const body = document.createElement("div");
+  body.className = "rc-diff-body";
+  const leftPanel = document.createElement("div");
+  leftPanel.className = "rc-diff-panel";
+  const leftHeader = document.createElement("div");
+  leftHeader.className = "rc-diff-panel-header rc-diff-original-header";
+  leftHeader.innerHTML = `<span>Original Text</span>`;
+  const leftContent = document.createElement("div");
+  leftContent.className = "rc-diff-content";
+  leftPanel.appendChild(leftHeader);
+  leftPanel.appendChild(leftContent);
+  const rightPanel = document.createElement("div");
+  rightPanel.className = "rc-diff-panel";
+  const rightHeader = document.createElement("div");
+  rightHeader.className = "rc-diff-panel-header rc-diff-transformed-header";
+  rightHeader.innerHTML = `
+    <span>Recast Transformed</span>
+    <span style="font-size:10px;text-transform:none;opacity:0.75;">(Editable below)</span>
+  `;
+  const rightContent = document.createElement("div");
+  rightContent.className = "rc-diff-content";
+  rightContent.style.flex = "1";
+  const editTextarea = document.createElement("textarea");
+  editTextarea.className = "rc-diff-textarea";
+  editTextarea.value = userEditedText;
+  editTextarea.placeholder = "Fine-tune the recast prose here before accepting...";
+  editTextarea.style.height = "140px";
+  editTextarea.style.flex = "0 0 auto";
+  editTextarea.oninput = () => {
+    userEditedText = editTextarea.value;
+    if (currentStepIdx === 0 && steps.length > 0) {
+      steps[0].newText = userEditedText;
+      const { oldHtml, newHtml } = computeWordDiff(steps[0].oldText, userEditedText);
+      leftContent.innerHTML = oldHtml;
+      rightContent.innerHTML = newHtml;
+    }
+  };
+  rightPanel.appendChild(rightHeader);
+  rightPanel.appendChild(rightContent);
+  rightPanel.appendChild(editTextarea);
+  body.appendChild(leftPanel);
+  body.appendChild(rightPanel);
+  function renderStep(idx) {
+    currentStepIdx = idx;
+    const step = steps[idx];
+    if (!step)
+      return;
+    const buttons = stepsBar.querySelectorAll(".rc-diff-step-btn");
+    buttons.forEach((btn, bIdx) => {
+      btn.classList.toggle("active", bIdx === idx);
+    });
+    leftHeader.innerHTML = `<span>${step.oldLabel}</span>`;
+    rightHeader.innerHTML = `
+      <span>${step.newLabel}${step.passName ? ` (${step.passName})` : ""}</span>
+      ${idx === 0 ? '<span style="font-size:10px;text-transform:none;opacity:0.75;">(Editable below)</span>' : ""}
+    `;
+    const targetNew = idx === 0 ? userEditedText : step.newText;
+    const { oldHtml, newHtml } = computeWordDiff(step.oldText, targetNew);
+    leftContent.innerHTML = oldHtml;
+    rightContent.innerHTML = newHtml;
+    if (idx === 0) {
+      editTextarea.style.display = "";
+      rightContent.style.flex = "1";
+    } else {
+      editTextarea.style.display = "none";
+      rightContent.style.flex = "1 1 auto";
+    }
+  }
+  steps.forEach((step, sIdx) => {
+    const stepBtn = document.createElement("button");
+    stepBtn.className = `rc-diff-step-btn ${sIdx === 0 ? "active" : ""}`;
+    stepBtn.textContent = step.caption;
+    stepBtn.onclick = () => renderStep(sIdx);
+    stepsBar.appendChild(stepBtn);
+  });
+  if (steps.length > 1) {
+    modal.appendChild(stepsBar);
+  }
+  modal.appendChild(body);
+  renderStep(0);
+  const footer = document.createElement("div");
+  footer.className = "rc-diff-footer";
+  const rejectBtn = document.createElement("button");
+  rejectBtn.className = "rc-diff-btn rc-diff-reject-btn";
+  rejectBtn.innerHTML = `Keep Original`;
+  rejectBtn.onclick = () => {
+    closeRecastDiffModal();
+    hostCtx?.toast?.info?.("Recast changes discarded.");
+  };
+  const swipeBtn = document.createElement("button");
+  swipeBtn.className = "rc-diff-btn rc-diff-swipe-btn";
+  swipeBtn.innerHTML = `\uD83D\uDD00 Accept as Swipe`;
+  swipeBtn.onclick = () => {
+    const textToApply = userEditedText;
+    hostCtx?.sendToBackend({
+      type: "RECAST_APPLY_RESULT",
+      chatId: diff.chatId,
+      messageId: diff.messageId,
+      text: textToApply,
+      mode: "swipe"
+    });
+    closeRecastDiffModal();
+  };
+  const acceptBtn = document.createElement("button");
+  acceptBtn.className = "rc-diff-btn rc-diff-accept-btn";
+  acceptBtn.innerHTML = `✅ Accept & Replace`;
+  acceptBtn.onclick = () => {
+    const textToApply = userEditedText;
+    hostCtx?.sendToBackend({
+      type: "RECAST_APPLY_RESULT",
+      chatId: diff.chatId,
+      messageId: diff.messageId,
+      text: textToApply,
+      mode: "replace"
+    });
+    closeRecastDiffModal();
+  };
+  footer.appendChild(rejectBtn);
+  footer.appendChild(swipeBtn);
+  footer.appendChild(acceptBtn);
+  modal.appendChild(footer);
+  backdrop.appendChild(modal);
+  backdrop.onclick = closeRecastDiffModal;
+  host.appendChild(backdrop);
+}
+
 // src/frontend.ts
 var RECURSION_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 0 1 10 10c0 5.523-4.477 10-10 10S2 17.523 2 12"/><path d="M12 6a6 6 0 0 1 6 6c0 3.314-2.686 6-6 6s-6-2.686-6-6"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>`;
 var BOOK_ICON_SVG = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>`;
@@ -742,6 +2132,9 @@ var currentProgress = {
 var availableConnections = [];
 var availableWorldBooks = [];
 var activeCharacterStatus = null;
+var activeNavTab = "reasoning";
+var currentRecastSettings = { ...DEFAULT_RECAST_SETTINGS };
+var currentRecastProgress = null;
 var panelRoots = new Set;
 var inputBarActionHandle = null;
 var openCategories = new Set;
@@ -783,6 +2176,36 @@ function renderMainPanel(root) {
   root.innerHTML = "";
   const container = document.createElement("div");
   container.className = "lr-root";
+  const navBar = document.createElement("div");
+  navBar.className = "lr-tab-nav";
+  const reasoningTabBtn = document.createElement("button");
+  reasoningTabBtn.className = `lr-tab-btn ${activeNavTab === "reasoning" ? "active" : ""}`;
+  reasoningTabBtn.innerHTML = `<span>\uD83E\uDDE0 Scene Reasoning</span>`;
+  reasoningTabBtn.onclick = () => {
+    activeNavTab = "reasoning";
+    renderAllPanels();
+  };
+  const recastTabBtn = document.createElement("button");
+  recastTabBtn.className = `lr-tab-btn ${activeNavTab === "recast" ? "active-recast" : ""}`;
+  recastTabBtn.innerHTML = `<span>✨ Recast Post-Processing</span>`;
+  recastTabBtn.onclick = () => {
+    activeNavTab = "recast";
+    renderAllPanels();
+  };
+  navBar.appendChild(reasoningTabBtn);
+  navBar.appendChild(recastTabBtn);
+  container.appendChild(navBar);
+  if (activeNavTab === "recast") {
+    renderRecastPanel(container, {
+      recastSettings: currentRecastSettings,
+      recastProgress: currentRecastProgress,
+      availableConnections,
+      hostCtx,
+      onRefresh: renderAllPanels
+    });
+    root.appendChild(container);
+    return;
+  }
   const bar = document.createElement("div");
   bar.className = "lr-bar";
   const barLeft = document.createElement("div");
@@ -1301,7 +2724,8 @@ function renderMainPanel(root) {
 }
 async function setup(ctx) {
   hostCtx = ctx;
-  const removeStyle = ctx.dom.addStyle(STYLES);
+  const removeStyle = ctx.dom.addStyle(STYLES + `
+` + RECAST_STYLES);
   ensureModalHost();
   const drawerHandle = ctx.ui.registerDrawerTab({
     id: "lumi-recursion",
@@ -1376,6 +2800,10 @@ async function setup(ctx) {
         availableConnections = msg.connections || [];
         availableWorldBooks = msg.worldBooks || [];
         activeCharacterStatus = msg.characterStatus || null;
+        if (msg.recastSettings) {
+          currentRecastSettings = msg.recastSettings;
+        }
+        currentRecastProgress = msg.recastProgress || null;
         updateInputBarLabel();
         renderAllPanels();
         break;
@@ -1417,6 +2845,25 @@ async function setup(ctx) {
       }
       case "CHARACTER_STATUS_UPDATED": {
         activeCharacterStatus = msg.status;
+        renderAllPanels();
+        break;
+      }
+      case "RECAST_STATE_UPDATED": {
+        currentRecastSettings = msg.settings;
+        currentRecastProgress = msg.progress;
+        renderAllPanels();
+        break;
+      }
+      case "RECAST_PROGRESS": {
+        currentRecastProgress = msg.progress;
+        renderAllPanels();
+        break;
+      }
+      case "RECAST_DIFF_READY": {
+        showRecastDiffModal(msg.diff, ctx);
+        break;
+      }
+      case "RECAST_APPLIED": {
         renderAllPanels();
         break;
       }

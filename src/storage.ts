@@ -3,8 +3,9 @@
  * Uses Spindle's safe per-file JSON storage with independent fault tolerance.
  */
 
-import type { RecursionSettings, DeckDefinition, TurnBrief } from './types';
+import type { RecursionSettings, DeckDefinition, TurnBrief, RecastSettings } from './types';
 import { createDefaultDeck, DEFAULT_DECK_ID } from './cards/defaults';
+import { DEFAULT_RECAST_SETTINGS } from './recast/defaults';
 
 export const DEFAULT_SETTINGS: RecursionSettings = {
   enabled: true,
@@ -140,6 +141,34 @@ export class StorageManager {
       }
     } catch (err) {
       console.error('[Lumi:REcursion] Failed to save last_brief.json:', err);
+    }
+  }
+
+  async loadRecastSettings(): Promise<RecastSettings> {
+    try {
+      if (this.sp?.storage?.getJson) {
+        const data = await this.sp.storage.getJson('recast_settings.json');
+        if (data && typeof data === 'object') {
+          return {
+            ...DEFAULT_RECAST_SETTINGS,
+            ...data,
+            presets: Array.isArray(data.presets) && data.presets.length > 0 ? data.presets : DEFAULT_RECAST_SETTINGS.presets
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[Lumi:REcursion] Failed to load recast_settings.json, using defaults:', err);
+    }
+    return { ...DEFAULT_RECAST_SETTINGS };
+  }
+
+  async saveRecastSettings(settings: RecastSettings): Promise<void> {
+    try {
+      if (this.sp?.storage?.setJson) {
+        await this.sp.storage.setJson('recast_settings.json', settings);
+      }
+    } catch (err) {
+      console.error('[Lumi:REcursion] Failed to save recast_settings.json:', err);
     }
   }
 }

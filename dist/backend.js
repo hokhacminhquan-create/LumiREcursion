@@ -324,6 +324,119 @@ function createDefaultDeck() {
   };
 }
 
+// src/recast/defaults.ts
+var PASS_GROUNDING = {
+  id: "pass_grounding",
+  name: "\u26D3\uFE0F Grounding",
+  enabled: false,
+  contextLength: 3,
+  prompt: `You are a prose editor. Edit <text_to_transform> so it feels rooted in the story's world, consistent with its rules, tone, setting, and the way things work there. Making it feels like it belongs to this specific world. Do not make slop or guesswork.
+Essentially make the text make sense, apply crude logic and reactions from the world, scene and characters.
+You don't have context about the scene, keep that in mind.
+
+When a character announces an action and then immediately executes it or time passes, add one short beat between the two so the reader doesn't feel like they blinked and missed the transition. It can be a reaction, a half-second, anything that confirms time moved.
+
+Return only the rewritten text. No explanations, no notes, no commentary.`,
+  connection: "",
+  injectWorldInfo: true,
+  includeCharCard: true,
+  includeSceneContext: true
+};
+var PASS_VALIDATOR = {
+  id: "pass_validator",
+  name: "\u2705 Character Behavior Validator",
+  enabled: true,
+  contextLength: 7,
+  prompt: `You are a character consistency editor. Your only job is to fix dialog and actions that are not in character in <text_to_transform>. Do not improve prose. Do not fix grammar. Do not restructure sentences. Keep in mind you may not have received the whole scene context.
+Priority order for character signals: example dialogue > personality traits > general description > scene context.
+
+Fix text if it:
+- Uses phrasing that contradicts the example dialogue voice
+- Has the character act warmer, cooler, more helpful, or more dramatic than the card defines
+- Responds only to the surface of what was said, ignoring what the other character is visibly feeling
+- States emotion directly instead of showing it through behavior or word choice
+- Resolves tension the character would hold
+
+<banned_behaviors>
+Also following are behaviors from characters that should be modified or removed completely:
+- Asking for a compensation, any kind of 'Okay but give me this', should be avoided and exchanged to something else. Compliance is not easily bought.
+- Stiff unexpected behavior from characters. Characters should not stop and ask things if it doesn't fit them or the context.
+</banned_behaviors>
+
+Return only the corrected text. No explanations, no commentary.`,
+  connection: "",
+  injectWorldInfo: false,
+  includeCharCard: true,
+  includeSceneContext: true
+};
+var PASS_PROSE = {
+  id: "pass_prose",
+  name: "\u2712\uFE0F Prose Rhythm",
+  enabled: true,
+  contextLength: 13,
+  prompt: `You are a prose editor. Your only job is to improve how <text_to_transform> reads without changing what it says.
+Rules:
+- Do not change any dialogue. Not a single word.
+- Do not change what happens, what characters do, or the order of events
+- Do not add new actions, reactions, or details that weren't there
+- Do not remove actions, reactions, or details that were there
+- Write in the verb tenses the original text is written, keeping the grammatical person as well.
+- Prioritize avoiding repetition of descriptive words by changing the phrase or removing it altogether
+
+What you may change:
+- Sentence length variation, break up monotonous rhythm, mix short and long
+- Eliminate repeated sentence structures, especially consecutive sentences starting the same way
+- Convert telling to showing, remove emotion labels and replace with physical behavior or action
+- Cut filler phrases that carry no meaning
+- Tighten overly wordy constructions without losing meaning
+- Favor flowing sentences connected by conjunctions over short stopped ones
+- Remove any unnecessary 'waiting' at the end of the dialog, if that wait is already clear by the text or cannot be implemented naturally with something else, then remove it
+
+Use the scene context only to match the established prose tone and style of the exchange. Do not drift from the register already set.
+
+Return only the rewritten text. No explanations, no notes, no commentary.`,
+  connection: "",
+  injectWorldInfo: false,
+  includeCharCard: false,
+  includeSceneContext: true
+};
+var PASS_REPETITION_HAMMER = {
+  id: "pass_repetitionhammer",
+  name: "\uD83D\uDD28 Repetition Hammer",
+  enabled: false,
+  contextLength: 35,
+  prompt: `Simply edit <text_to_transform> and remove all repeated words or dialogs from it.
+
+Rules:
+- Remove only words that are removable
+- Change only if allows the text to still make sense
+- Prioritize removing things seen in the more recent interactions
+
+Return only the rewritten text. No explanations, no notes, no commentary. Think only once to avoid overthinking.`,
+  connection: "",
+  injectWorldInfo: false,
+  includeCharCard: false,
+  includeSceneContext: true
+};
+var DEFAULT_RECAST_PRESET = {
+  id: "default_recast_preset",
+  name: "Canonical Recast Preset",
+  passes: [
+    { ...PASS_GROUNDING },
+    { ...PASS_VALIDATOR },
+    { ...PASS_PROSE },
+    { ...PASS_REPETITION_HAMMER }
+  ]
+};
+var DEFAULT_RECAST_SETTINGS = {
+  enabled: false,
+  autoRun: false,
+  applyMode: "diff",
+  minChars: 30,
+  activePresetId: "default_recast_preset",
+  presets: [DEFAULT_RECAST_PRESET]
+};
+
 // src/storage.ts
 var DEFAULT_SETTINGS = {
   enabled: true,
@@ -449,6 +562,32 @@ class StorageManager {
       }
     } catch (err) {
       console.error("[Lumi:REcursion] Failed to save last_brief.json:", err);
+    }
+  }
+  async loadRecastSettings() {
+    try {
+      if (this.sp?.storage?.getJson) {
+        const data = await this.sp.storage.getJson("recast_settings.json");
+        if (data && typeof data === "object") {
+          return {
+            ...DEFAULT_RECAST_SETTINGS,
+            ...data,
+            presets: Array.isArray(data.presets) && data.presets.length > 0 ? data.presets : DEFAULT_RECAST_SETTINGS.presets
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("[Lumi:REcursion] Failed to load recast_settings.json, using defaults:", err);
+    }
+    return { ...DEFAULT_RECAST_SETTINGS };
+  }
+  async saveRecastSettings(settings) {
+    try {
+      if (this.sp?.storage?.setJson) {
+        await this.sp.storage.setJson("recast_settings.json", settings);
+      }
+    } catch (err) {
+      console.error("[Lumi:REcursion] Failed to save recast_settings.json:", err);
     }
   }
 }
@@ -859,6 +998,208 @@ async function updateCharacterCardState(spindle2, characterId, cardId, state) {
   }
 }
 
+// src/recast/pipeline.ts
+function cleanModelOutput(text) {
+  if (!text)
+    return "";
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
+  const matchWrapped = cleaned.match(/<text_to_transform>([\s\S]*?)<\/text_to_transform>/i);
+  if (matchWrapped && matchWrapped[1]) {
+    cleaned = matchWrapped[1].trim();
+  } else {
+    cleaned = cleaned.replace(/<\/?text_to_transform>/gi, "").trim();
+  }
+  return cleaned;
+}
+async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId) {
+  if (!pass.enabled)
+    return textToTransform;
+  let systemPrompt = pass.prompt.trim();
+  let charCardXml = "";
+  if (pass.includeCharCard && sp?.characters?.get) {
+    try {
+      let charId = null;
+      if (chatId && sp?.chats?.get) {
+        const chat = await sp.chats.get(chatId);
+        charId = chat?.characterId || chat?.character_id || null;
+      }
+      if (!charId && sp?.chats?.getActive) {
+        const activeChat = await sp.chats.getActive();
+        charId = activeChat?.characterId || activeChat?.character_id || null;
+      }
+      if (charId) {
+        const char = await sp.characters.get(charId);
+        if (char) {
+          const lines = [
+            char.name ? `<name>${char.name}</name>` : "",
+            char.description ? `<description>${char.description}</description>` : "",
+            char.personality ? `<personality>${char.personality}</personality>` : "",
+            char.scenario ? `<scenario>${char.scenario}</scenario>` : "",
+            char.mes_example ? `<example_dialogue>
+${char.mes_example}
+</example_dialogue>` : ""
+          ].filter(Boolean);
+          if (lines.length > 0) {
+            charCardXml = `<characters>
+${lines.join(`
+`)}
+</characters>`;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[Lumi:REcursion:Recast] Failed to retrieve character info for pass:", err);
+    }
+  }
+  let sceneContextXml = "";
+  if (pass.includeSceneContext && pass.contextLength > 0 && sp?.chat?.getMessages && chatId) {
+    try {
+      const allMessages = await sp.chat.getMessages(chatId);
+      if (Array.isArray(allMessages) && allMessages.length > 0) {
+        let cutoffIndex = allMessages.length;
+        if (targetMessageId) {
+          const foundIdx = allMessages.findIndex((m) => m.id === targetMessageId);
+          if (foundIdx !== -1) {
+            cutoffIndex = foundIdx;
+          }
+        }
+        const historySlice = allMessages.slice(0, cutoffIndex).slice(-pass.contextLength);
+        if (historySlice.length > 0) {
+          const lines = historySlice.map((m) => {
+            const roleName = m.name || (m.role === "user" || m.is_user ? "User" : "Assistant");
+            const content = m.content || "";
+            return `${roleName}: ${content}`;
+          });
+          sceneContextXml = `<scene_context>
+${lines.join(`
+`)}
+</scene_context>`;
+        }
+      }
+    } catch (err) {
+      console.warn("[Lumi:REcursion:Recast] Failed to retrieve chat history for pass:", err);
+    }
+  }
+  if (pass.injectWorldInfo && sp?.world_books) {
+    try {
+      let wbText = "";
+      if (sp.world_books.list) {
+        const books = await sp.world_books.list();
+        if (Array.isArray(books) && books.length > 0) {
+          const firstBook = await sp.world_books.get(books[0].id);
+          if (firstBook && Array.isArray(firstBook.entries)) {
+            const snippet = firstBook.entries.filter((e) => e.enabled !== false).slice(0, 5).map((e) => `[${e.keys?.join(", ") || "Entry"}]: ${e.content}`).join(`
+`);
+            if (snippet)
+              wbText = snippet;
+          }
+        }
+      }
+      if (wbText) {
+        systemPrompt += `
+
+<world_info>
+${wbText}
+</world_info>`;
+      }
+    } catch (err) {
+      console.warn("[Lumi:REcursion:Recast] World info injection skipped:", err);
+    }
+  }
+  const userSections = [];
+  if (charCardXml)
+    userSections.push(charCardXml);
+  if (sceneContextXml)
+    userSections.push(sceneContextXml);
+  userSections.push(`<text_to_transform>
+${textToTransform}
+</text_to_transform>`);
+  const userPrompt = userSections.join(`
+
+`);
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt }
+  ];
+  if (pass.prefill && pass.prefill.trim()) {
+    messages.push({
+      role: pass.prefillRole || "assistant",
+      content: pass.prefill.trim()
+    });
+  }
+  const genPayload = {
+    messages,
+    parameters: {
+      temperature: 0.3
+    }
+  };
+  if (pass.connection) {
+    genPayload.connection_id = pass.connection;
+  }
+  const rawRes = await sp.generate.raw(genPayload);
+  let outputText = "";
+  if (typeof rawRes === "string") {
+    outputText = rawRes;
+  } else if (rawRes && typeof rawRes === "object") {
+    outputText = rawRes.content || rawRes.text || rawRes.message?.content || "";
+  }
+  const cleaned = cleanModelOutput(outputText);
+  return cleaned && cleaned.length > 0 ? cleaned : textToTransform;
+}
+async function runRecastPipeline(sp, options) {
+  const { chatId, messageId, rawText, settings, onProgress } = options;
+  if (!rawText || rawText.trim().length === 0)
+    return null;
+  const activePreset = settings.presets.find((p) => p.id === settings.activePresetId) || settings.presets[0];
+  if (!activePreset)
+    return null;
+  const enabledPasses = activePreset.passes.filter((p) => p.enabled);
+  if (enabledPasses.length === 0)
+    return null;
+  const tStart = Date.now();
+  let currentText = rawText;
+  const snapshots = [rawText];
+  const passNames = [];
+  for (let i = 0;i < enabledPasses.length; i++) {
+    const pass = enabledPasses[i];
+    passNames.push(pass.name);
+    onProgress?.({
+      active: true,
+      currentPassIndex: i + 1,
+      totalPasses: enabledPasses.length,
+      currentPassName: pass.name,
+      statusText: `Running pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`
+    });
+    try {
+      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId);
+      currentText = passOutput;
+      snapshots.push(currentText);
+    } catch (err) {
+      console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
+      snapshots.push(currentText);
+    }
+  }
+  const totalLatencyMs = Date.now() - tStart;
+  onProgress?.({
+    active: false,
+    currentPassIndex: enabledPasses.length,
+    totalPasses: enabledPasses.length,
+    currentPassName: "",
+    statusText: `Complete in ${totalLatencyMs}ms`
+  });
+  return {
+    chatId,
+    messageId,
+    originalText: rawText,
+    transformedText: currentText,
+    snapshots,
+    passNames,
+    totalLatencyMs
+  };
+}
+
 // src/backend.ts
 var sp = typeof spindle !== "undefined" ? spindle : null;
 var settings = { ...DEFAULT_SETTINGS };
@@ -872,6 +1213,9 @@ var currentProgress = {
   phase: "idle",
   pixels: []
 };
+var recastSettings = { ...DEFAULT_RECAST_SETTINGS };
+var recastProgress = null;
+var isRecastRunning = false;
 var cachedTurn = null;
 var storage;
 function simpleHash(str) {
@@ -987,7 +1331,81 @@ async function resolveTurnCards(context) {
   decks = deckData.decks;
   activeDeckId = deckData.activeDeckId;
   lastBrief = await storage.loadLastBrief();
-  console.log("[Lumi:REcursion] Initialized with source mode:", settings.cardSourceMode, "Active deck:", activeDeckId, "Enabled:", settings.enabled);
+  recastSettings = await storage.loadRecastSettings();
+  console.log("[Lumi:REcursion] Initialized with source mode:", settings.cardSourceMode, "Active deck:", activeDeckId, "Enabled:", settings.enabled, "Recast Enabled:", recastSettings.enabled);
+  if (typeof sp.on === "function") {
+    sp.on("GENERATION_ENDED", async (payload) => {
+      if (!recastSettings.enabled || !recastSettings.autoRun)
+        return;
+      if (!payload || payload.error)
+        return;
+      if (!payload.content || payload.content.trim().length < (recastSettings.minChars || 20))
+        return;
+      if (!payload.chatId || !payload.messageId)
+        return;
+      if (isRecastRunning)
+        return;
+      isRecastRunning = true;
+      try {
+        const diff = await runRecastPipeline(sp, {
+          chatId: payload.chatId,
+          messageId: payload.messageId,
+          rawText: payload.content,
+          settings: recastSettings,
+          onProgress: (prog) => {
+            recastProgress = prog;
+            sp.sendToFrontend?.({ type: "RECAST_PROGRESS", progress: prog });
+          }
+        });
+        if (diff && diff.transformedText && diff.transformedText !== diff.originalText) {
+          if (recastSettings.applyMode === "replace") {
+            await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText });
+            sp.toast?.success?.("\u2728 Recast post-processing applied in-place");
+            sp.sendToFrontend?.({
+              type: "RECAST_APPLIED",
+              chatId: diff.chatId,
+              messageId: diff.messageId,
+              mode: "replace"
+            });
+          } else if (recastSettings.applyMode === "swipe") {
+            const allMsgs = await sp.chat.getMessages(diff.chatId);
+            const msg = allMsgs.find((m) => m.id === diff.messageId);
+            const existingSwipes = Array.isArray(msg?.swipes) && msg.swipes.length > 0 ? msg.swipes : [diff.originalText];
+            const newSwipes = [...existingSwipes, diff.transformedText];
+            const newSwipeId = newSwipes.length - 1;
+            await sp.chat.updateMessage(diff.chatId, diff.messageId, {
+              swipes: newSwipes,
+              swipe_id: newSwipeId
+            });
+            sp.toast?.success?.("\u2728 Recast post-processing added as new swipe");
+            sp.sendToFrontend?.({
+              type: "RECAST_APPLIED",
+              chatId: diff.chatId,
+              messageId: diff.messageId,
+              mode: "swipe"
+            });
+          } else {
+            sp.sendToFrontend?.({ type: "RECAST_DIFF_READY", diff });
+          }
+        }
+      } catch (err) {
+        console.error("[Lumi:REcursion:Recast] Error during auto-recast:", err);
+      } finally {
+        isRecastRunning = false;
+        recastProgress = null;
+        sp.sendToFrontend?.({
+          type: "RECAST_PROGRESS",
+          progress: {
+            active: false,
+            currentPassIndex: 0,
+            totalPasses: 0,
+            currentPassName: "",
+            statusText: ""
+          }
+        });
+      }
+    });
+  }
   sp.registerInterceptor(async (messages, context) => {
     if (!settings.enabled) {
       return messages;
@@ -1220,7 +1638,9 @@ async function resolveTurnCards(context) {
           progress: currentProgress,
           connections: conns,
           worldBooks: wbs,
-          characterStatus: charStatus
+          characterStatus: charStatus,
+          recastSettings,
+          recastProgress
         });
         break;
       }
@@ -1362,6 +1782,152 @@ async function resolveTurnCards(context) {
       case "GET_CONNECTIONS": {
         const conns = await listConnections();
         sp.sendToFrontend({ type: "CONNECTIONS", connections: conns });
+        break;
+      }
+      case "RECAST_UPDATE_SETTINGS": {
+        recastSettings = { ...recastSettings, ...msg.settings };
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: "RECAST_STATE_UPDATED", settings: recastSettings, progress: recastProgress });
+        break;
+      }
+      case "RECAST_UPDATE_PRESET": {
+        const pIdx = recastSettings.presets.findIndex((p) => p.id === msg.preset.id);
+        if (pIdx !== -1) {
+          recastSettings.presets[pIdx] = msg.preset;
+        } else {
+          recastSettings.presets.push(msg.preset);
+        }
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: "RECAST_STATE_UPDATED", settings: recastSettings, progress: recastProgress });
+        break;
+      }
+      case "RECAST_CREATE_PRESET": {
+        const newPreset = {
+          id: `preset_${Date.now()}`,
+          name: msg.name || "Custom Preset",
+          passes: [
+            { ...PASS_GROUNDING, id: `pass_${Date.now()}_1` },
+            { ...PASS_VALIDATOR, id: `pass_${Date.now()}_2` },
+            { ...PASS_PROSE, id: `pass_${Date.now()}_3` }
+          ]
+        };
+        recastSettings.presets.push(newPreset);
+        recastSettings.activePresetId = newPreset.id;
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: "RECAST_STATE_UPDATED", settings: recastSettings, progress: recastProgress });
+        sp.toast?.success?.(`\u2728 Created preset: "${newPreset.name}"`);
+        break;
+      }
+      case "RECAST_DELETE_PRESET": {
+        if (recastSettings.presets.length > 1) {
+          recastSettings.presets = recastSettings.presets.filter((p) => p.id !== msg.presetId);
+          if (recastSettings.activePresetId === msg.presetId) {
+            recastSettings.activePresetId = recastSettings.presets[0].id;
+          }
+          await storage.saveRecastSettings(recastSettings);
+          sp.sendToFrontend({ type: "RECAST_STATE_UPDATED", settings: recastSettings, progress: recastProgress });
+          sp.toast?.info?.("\uD83D\uDDD1\uFE0F Preset deleted");
+        } else {
+          sp.toast?.warn?.("Cannot delete the only remaining preset.");
+        }
+        break;
+      }
+      case "RECAST_RESET_PRESET": {
+        recastSettings.presets = [JSON.parse(JSON.stringify(DEFAULT_RECAST_PRESET))];
+        recastSettings.activePresetId = DEFAULT_RECAST_PRESET.id;
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: "RECAST_STATE_UPDATED", settings: recastSettings, progress: recastProgress });
+        sp.toast?.info?.("\uD83D\uDD04 Reset Recast presets to defaults");
+        break;
+      }
+      case "RECAST_RUN_MESSAGE": {
+        if (isRecastRunning) {
+          sp.toast?.warn?.("Recast pipeline is already running.");
+          break;
+        }
+        try {
+          let targetChatId = msg.chatId;
+          let targetMessageId = msg.messageId;
+          let targetText = "";
+          if (!targetChatId && sp.chats?.getActive) {
+            const activeChat = await sp.chats.getActive();
+            targetChatId = activeChat?.id;
+          }
+          if (targetChatId && !targetMessageId && sp.chat?.getMessages) {
+            const msgs = await sp.chat.getMessages(targetChatId);
+            if (Array.isArray(msgs) && msgs.length > 0) {
+              for (let i = msgs.length - 1;i >= 0; i--) {
+                if (!msgs[i].is_user && msgs[i].role !== "user" && msgs[i].role !== "system") {
+                  targetMessageId = msgs[i].id;
+                  targetText = msgs[i].content;
+                  break;
+                }
+              }
+            }
+          } else if (targetChatId && targetMessageId && sp.chat?.getMessages) {
+            const msgs = await sp.chat.getMessages(targetChatId);
+            const found = msgs.find((m) => m.id === targetMessageId);
+            if (found)
+              targetText = found.content;
+          }
+          if (!targetChatId || !targetMessageId || !targetText) {
+            sp.toast?.warn?.("No assistant message found in current chat to recast.");
+            break;
+          }
+          isRecastRunning = true;
+          sp.toast?.info?.("\u2728 Running Recast post-processing pipeline...");
+          const diff = await runRecastPipeline(sp, {
+            chatId: targetChatId,
+            messageId: targetMessageId,
+            rawText: targetText,
+            settings: recastSettings,
+            onProgress: (prog) => {
+              recastProgress = prog;
+              sp.sendToFrontend?.({ type: "RECAST_PROGRESS", progress: prog });
+            }
+          });
+          if (diff) {
+            sp.sendToFrontend?.({ type: "RECAST_DIFF_READY", diff });
+          }
+        } catch (err) {
+          console.error("[Lumi:REcursion:Recast] Manual recast failed:", err);
+          sp.toast?.error?.(`Recast failed: ${err?.message || err}`);
+        } finally {
+          isRecastRunning = false;
+          recastProgress = null;
+          sp.sendToFrontend?.({
+            type: "RECAST_PROGRESS",
+            progress: {
+              active: false,
+              currentPassIndex: 0,
+              totalPasses: 0,
+              currentPassName: "",
+              statusText: ""
+            }
+          });
+        }
+        break;
+      }
+      case "RECAST_APPLY_RESULT": {
+        try {
+          const { chatId, messageId, text, mode } = msg;
+          if (mode === "replace") {
+            await sp.chat.updateMessage(chatId, messageId, { content: text });
+            sp.toast?.success?.("\u2705 Recast applied in-place");
+          } else if (mode === "swipe") {
+            const allMsgs = await sp.chat.getMessages(chatId);
+            const existing = allMsgs.find((m) => m.id === messageId);
+            const existingSwipes = Array.isArray(existing?.swipes) && existing.swipes.length > 0 ? existing.swipes : [existing?.content || ""];
+            const newSwipes = [...existingSwipes, text];
+            const newSwipeId = newSwipes.length - 1;
+            await sp.chat.updateMessage(chatId, messageId, { swipes: newSwipes, swipe_id: newSwipeId });
+            sp.toast?.success?.("\uD83D\uDD00 Recast saved as new swipe");
+          }
+          sp.sendToFrontend?.({ type: "RECAST_APPLIED", chatId, messageId, mode });
+        } catch (err) {
+          console.error("[Lumi:REcursion:Recast] Failed to apply recast result:", err);
+          sp.toast?.error?.(`Failed to apply recast: ${err?.message || err}`);
+        }
         break;
       }
     }

@@ -57,6 +57,26 @@ Instead of hardcoding card families inside inaccessible worker source, Lumi:REcu
 
 ---
 
+## ✨ Recast Post-Processing Pipeline
+
+Integrated directly from SillyTavern's **Recast** post-processing suite, Lumi:REcursion now delivers an end-to-end reasoning and refinement lifecycle: **Pre-Turn Scene Reasoning + Post-Generation Prose Recasting**.
+
+After the assistant message lands, Recast runs an automated or manual multi-pass transformation pipeline:
+
+### 🎯 4 Canonical Recast Passes:
+1. **⛓️ Grounding** (`pass_grounding`): Roots prose in the setting's physics and rules, inserting missing reaction beats between sudden transitions.
+2. **✅ Character Behavior Validator** (`pass_validator`): Ensures voice matches example dialogue and personality traits, eliminating out-of-character stiffness or transactional slop.
+3. **✒️ Prose Rhythm** (`pass_prose`): Refines sentence variation, converts telling into showing, and cuts wordy filler without touching plot or dialogue.
+4. **🔨 Repetition Hammer** (`pass_repetitionhammer`): Eliminates word echoes, repetitive loops, and tired catchphrases.
+
+### 🔍 Interactive Word-Level Diff Modal & Settlement Modes:
+- **Interactive Diff Review Modal**: Powered by a fast Myers word-level diff algorithm. Displays `<ins>` and `<del>` highlights with step navigation across all intermediate pass snapshots, plus a live editor to tweak the final text before accepting.
+- **Auto-Replace In-Place**: Instantly patches the chat message with the recast prose.
+- **Auto-Add as Swipe**: Preserves the original message and appends the transformed prose as a new swipe candidate.
+- **1-Click "Recast Latest Message"**: Test and refine any assistant message directly from the drawer tab on demand.
+
+---
+
 ## 🛠️ Build & Development
 
 ```bash

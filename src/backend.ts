@@ -16,7 +16,11 @@ import type {
   CardDefinition,
   RunProgressState,
   HeroPixelItem,
-  FrontendToBackendMessage
+  FrontendToBackendMessage,
+  RecastSettings,
+  RecastPreset,
+  RecastProgress,
+  RecastDiffData
 } from './types';
 import { StorageManager, DEFAULT_SETTINGS } from './storage';
 import {
@@ -39,6 +43,14 @@ import {
   readCardsFromCharacter,
   updateCharacterCardState
 } from './cards/character-payload';
+import {
+  DEFAULT_RECAST_SETTINGS,
+  DEFAULT_RECAST_PRESET,
+  PASS_GROUNDING,
+  PASS_VALIDATOR,
+  PASS_PROSE
+} from './recast/defaults';
+import { runRecastPipeline } from './recast/pipeline';
 
 // Declare ambient spindle object provided by Lumiverse Spindle host
 declare const spindle: any;
@@ -57,6 +69,11 @@ let currentProgress: RunProgressState = {
   phase: 'idle',
   pixels: []
 };
+
+// Recast post-processing state
+let recastSettings: RecastSettings = { ...DEFAULT_RECAST_SETTINGS };
+let recastProgress: RecastProgress | null = null;
+let isRecastRunning = false;
 
 // In-memory cache for turn evaluations keyed by context hash
 interface CachedTurn {
@@ -219,6 +236,7 @@ async function resolveTurnCards(
   decks = deckData.decks;
   activeDeckId = deckData.activeDeckId;
   lastBrief = await storage.loadLastBrief();
+  recastSettings = await storage.loadRecastSettings();
 
   console.log(
     '[Lumi:REcursion] Initialized with source mode:',
@@ -226,8 +244,84 @@ async function resolveTurnCards(
     'Active deck:',
     activeDeckId,
     'Enabled:',
-    settings.enabled
+    settings.enabled,
+    'Recast Enabled:',
+    recastSettings.enabled
   );
+
+  // ── Post-Generation Recast Hook ────────────────────────────────────────────
+  if (typeof sp.on === 'function') {
+    sp.on('GENERATION_ENDED', async (payload: any) => {
+      if (!recastSettings.enabled || !recastSettings.autoRun) return;
+      if (!payload || payload.error) return;
+      if (!payload.content || payload.content.trim().length < (recastSettings.minChars || 20)) return;
+      if (!payload.chatId || !payload.messageId) return;
+      if (isRecastRunning) return;
+
+      isRecastRunning = true;
+      try {
+        const diff = await runRecastPipeline(sp, {
+          chatId: payload.chatId,
+          messageId: payload.messageId,
+          rawText: payload.content,
+          settings: recastSettings,
+          onProgress: (prog) => {
+            recastProgress = prog;
+            sp.sendToFrontend?.({ type: 'RECAST_PROGRESS', progress: prog });
+          }
+        });
+
+        if (diff && diff.transformedText && diff.transformedText !== diff.originalText) {
+          if (recastSettings.applyMode === 'replace') {
+            await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText });
+            sp.toast?.success?.('✨ Recast post-processing applied in-place');
+            sp.sendToFrontend?.({
+              type: 'RECAST_APPLIED',
+              chatId: diff.chatId,
+              messageId: diff.messageId,
+              mode: 'replace'
+            });
+          } else if (recastSettings.applyMode === 'swipe') {
+            const allMsgs = await sp.chat.getMessages(diff.chatId);
+            const msg = allMsgs.find((m: any) => m.id === diff.messageId);
+            const existingSwipes =
+              Array.isArray(msg?.swipes) && msg.swipes.length > 0 ? msg.swipes : [diff.originalText];
+            const newSwipes = [...existingSwipes, diff.transformedText];
+            const newSwipeId = newSwipes.length - 1;
+            await sp.chat.updateMessage(diff.chatId, diff.messageId, {
+              swipes: newSwipes,
+              swipe_id: newSwipeId
+            });
+            sp.toast?.success?.('✨ Recast post-processing added as new swipe');
+            sp.sendToFrontend?.({
+              type: 'RECAST_APPLIED',
+              chatId: diff.chatId,
+              messageId: diff.messageId,
+              mode: 'swipe'
+            });
+          } else {
+            // 'diff' mode: send to frontend to show the interactive comparison modal
+            sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
+          }
+        }
+      } catch (err: any) {
+        console.error('[Lumi:REcursion:Recast] Error during auto-recast:', err);
+      } finally {
+        isRecastRunning = false;
+        recastProgress = null;
+        sp.sendToFrontend?.({
+          type: 'RECAST_PROGRESS',
+          progress: {
+            active: false,
+            currentPassIndex: 0,
+            totalPasses: 0,
+            currentPassName: '',
+            statusText: ''
+          }
+        });
+      }
+    });
+  }
 
   // ── 1. Interceptor ─────────────────────────────────────────────────────────
   // Runs before generation, modifies prompt by injecting the compiled scene reasoning packet
@@ -529,7 +623,9 @@ async function resolveTurnCards(
           progress: currentProgress,
           connections: conns,
           worldBooks: wbs,
-          characterStatus: charStatus
+          characterStatus: charStatus,
+          recastSettings,
+          recastProgress
         });
         break;
       }
@@ -690,6 +786,168 @@ async function resolveTurnCards(
       case 'GET_CONNECTIONS': {
         const conns = await listConnections();
         sp.sendToFrontend({ type: 'CONNECTIONS', connections: conns });
+        break;
+      }
+
+      // ── Recast IPC Handlers ────────────────────────────────────────────────
+      case 'RECAST_UPDATE_SETTINGS': {
+        recastSettings = { ...recastSettings, ...msg.settings };
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: 'RECAST_STATE_UPDATED', settings: recastSettings, progress: recastProgress });
+        break;
+      }
+
+      case 'RECAST_UPDATE_PRESET': {
+        const pIdx = recastSettings.presets.findIndex((p) => p.id === msg.preset.id);
+        if (pIdx !== -1) {
+          recastSettings.presets[pIdx] = msg.preset;
+        } else {
+          recastSettings.presets.push(msg.preset);
+        }
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: 'RECAST_STATE_UPDATED', settings: recastSettings, progress: recastProgress });
+        break;
+      }
+
+      case 'RECAST_CREATE_PRESET': {
+        const newPreset: RecastPreset = {
+          id: `preset_${Date.now()}`,
+          name: msg.name || 'Custom Preset',
+          passes: [
+            { ...PASS_GROUNDING, id: `pass_${Date.now()}_1` },
+            { ...PASS_VALIDATOR, id: `pass_${Date.now()}_2` },
+            { ...PASS_PROSE, id: `pass_${Date.now()}_3` }
+          ]
+        };
+        recastSettings.presets.push(newPreset);
+        recastSettings.activePresetId = newPreset.id;
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: 'RECAST_STATE_UPDATED', settings: recastSettings, progress: recastProgress });
+        sp.toast?.success?.(`✨ Created preset: "${newPreset.name}"`);
+        break;
+      }
+
+      case 'RECAST_DELETE_PRESET': {
+        if (recastSettings.presets.length > 1) {
+          recastSettings.presets = recastSettings.presets.filter((p) => p.id !== msg.presetId);
+          if (recastSettings.activePresetId === msg.presetId) {
+            recastSettings.activePresetId = recastSettings.presets[0].id;
+          }
+          await storage.saveRecastSettings(recastSettings);
+          sp.sendToFrontend({ type: 'RECAST_STATE_UPDATED', settings: recastSettings, progress: recastProgress });
+          sp.toast?.info?.('🗑️ Preset deleted');
+        } else {
+          sp.toast?.warn?.('Cannot delete the only remaining preset.');
+        }
+        break;
+      }
+
+      case 'RECAST_RESET_PRESET': {
+        recastSettings.presets = [JSON.parse(JSON.stringify(DEFAULT_RECAST_PRESET))];
+        recastSettings.activePresetId = DEFAULT_RECAST_PRESET.id;
+        await storage.saveRecastSettings(recastSettings);
+        sp.sendToFrontend({ type: 'RECAST_STATE_UPDATED', settings: recastSettings, progress: recastProgress });
+        sp.toast?.info?.('🔄 Reset Recast presets to defaults');
+        break;
+      }
+
+      case 'RECAST_RUN_MESSAGE': {
+        if (isRecastRunning) {
+          sp.toast?.warn?.('Recast pipeline is already running.');
+          break;
+        }
+        try {
+          let targetChatId = msg.chatId;
+          let targetMessageId = msg.messageId;
+          let targetText = '';
+
+          if (!targetChatId && sp.chats?.getActive) {
+            const activeChat = await sp.chats.getActive();
+            targetChatId = activeChat?.id;
+          }
+
+          if (targetChatId && !targetMessageId && sp.chat?.getMessages) {
+            const msgs = await sp.chat.getMessages(targetChatId);
+            if (Array.isArray(msgs) && msgs.length > 0) {
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (!msgs[i].is_user && msgs[i].role !== 'user' && msgs[i].role !== 'system') {
+                  targetMessageId = msgs[i].id;
+                  targetText = msgs[i].content;
+                  break;
+                }
+              }
+            }
+          } else if (targetChatId && targetMessageId && sp.chat?.getMessages) {
+            const msgs = await sp.chat.getMessages(targetChatId);
+            const found = msgs.find((m: any) => m.id === targetMessageId);
+            if (found) targetText = found.content;
+          }
+
+          if (!targetChatId || !targetMessageId || !targetText) {
+            sp.toast?.warn?.('No assistant message found in current chat to recast.');
+            break;
+          }
+
+          isRecastRunning = true;
+          sp.toast?.info?.('✨ Running Recast post-processing pipeline...');
+
+          const diff = await runRecastPipeline(sp, {
+            chatId: targetChatId,
+            messageId: targetMessageId,
+            rawText: targetText,
+            settings: recastSettings,
+            onProgress: (prog) => {
+              recastProgress = prog;
+              sp.sendToFrontend?.({ type: 'RECAST_PROGRESS', progress: prog });
+            }
+          });
+
+          if (diff) {
+            sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
+          }
+        } catch (err: any) {
+          console.error('[Lumi:REcursion:Recast] Manual recast failed:', err);
+          sp.toast?.error?.(`Recast failed: ${err?.message || err}`);
+        } finally {
+          isRecastRunning = false;
+          recastProgress = null;
+          sp.sendToFrontend?.({
+            type: 'RECAST_PROGRESS',
+            progress: {
+              active: false,
+              currentPassIndex: 0,
+              totalPasses: 0,
+              currentPassName: '',
+              statusText: ''
+            }
+          });
+        }
+        break;
+      }
+
+      case 'RECAST_APPLY_RESULT': {
+        try {
+          const { chatId, messageId, text, mode } = msg;
+          if (mode === 'replace') {
+            await sp.chat.updateMessage(chatId, messageId, { content: text });
+            sp.toast?.success?.('✅ Recast applied in-place');
+          } else if (mode === 'swipe') {
+            const allMsgs = await sp.chat.getMessages(chatId);
+            const existing = allMsgs.find((m: any) => m.id === messageId);
+            const existingSwipes =
+              Array.isArray(existing?.swipes) && existing.swipes.length > 0
+                ? existing.swipes
+                : [existing?.content || ''];
+            const newSwipes = [...existingSwipes, text];
+            const newSwipeId = newSwipes.length - 1;
+            await sp.chat.updateMessage(chatId, messageId, { swipes: newSwipes, swipe_id: newSwipeId });
+            sp.toast?.success?.('🔀 Recast saved as new swipe');
+          }
+          sp.sendToFrontend?.({ type: 'RECAST_APPLIED', chatId, messageId, mode });
+        } catch (err: any) {
+          console.error('[Lumi:REcursion:Recast] Failed to apply recast result:', err);
+          sp.toast?.error?.(`Failed to apply recast: ${err?.message || err}`);
+        }
         break;
       }
     }
