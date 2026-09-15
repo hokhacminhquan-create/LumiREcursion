@@ -1,9 +1,10 @@
 /**
  * Lumi:REcursion — Recast Settings & Preset Management Panel
  * Renders the full Recast post-processing pipeline UI in Lumiverse Spindle
+ * Features live streaming progress, TTFT timeouts, model selection & thinking controls.
  */
 
-import type { RecastSettings, RecastProgress, RecastPass, RecastPreset } from './types';
+import type { RecastSettings, RecastProgress, RecastPass, RecastPreset, RecastReasoningEffort } from './types';
 
 // Track which passes are expanded
 const expandedPasses = new Set<string>();
@@ -13,7 +14,7 @@ export function renderRecastPanel(
   state: {
     recastSettings: RecastSettings;
     recastProgress: RecastProgress | null;
-    availableConnections: Array<{ id: string; name: string; is_default?: boolean }>;
+    availableConnections: Array<{ id: string; name: string; provider?: string; model?: string; is_default?: boolean }>;
     hostCtx: any;
     onRefresh: () => void;
   }
@@ -93,17 +94,51 @@ export function renderRecastPanel(
   bar.appendChild(barRight);
   container.appendChild(bar);
 
-  // 2. Recast Progress Bar (if running)
+  // 2. Real-Time Streaming Recast Progress Bar (if running)
   if (recastProgress && recastProgress.active) {
     const progBox = document.createElement('div');
     progBox.className = 'recast-progress-bar recast-pulse';
     progBox.style.borderColor = '#a78bfa';
+    progBox.style.background = 'rgba(167, 139, 250, 0.08)';
+
+    const phaseColor =
+      recastProgress.phase === 'thinking' ? '#fbbf24' :
+      recastProgress.phase === 'generating' ? '#34d399' : '#a78bfa';
+
+    const phaseLabel =
+      recastProgress.phase === 'thinking' ? '💭 Thinking' :
+      recastProgress.phase === 'generating' ? '📝 Generating' : '⏳ Connecting';
+
     progBox.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="color:#a78bfa;font-weight:700;">⚙️ [Pass ${recastProgress.currentPassIndex}/${recastProgress.totalPasses}]</span>
-        <span style="font-size:12px;color:#eee;">${recastProgress.currentPassName}</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="color:#a78bfa;font-weight:700;">⚙️ [Pass ${recastProgress.currentPassIndex}/${recastProgress.totalPasses}]</span>
+          <span style="font-size:12px;color:#eee;font-weight:600;">${recastProgress.currentPassName}</span>
+          <span class="lr-badge" style="background:rgba(0,0,0,0.3);color:${phaseColor};border-color:${phaseColor};">
+            ${phaseLabel}
+          </span>
+        </div>
+        <span style="font-size:11px;font-family:monospace;color:#a78bfa;font-weight:600;">
+          ${recastProgress.elapsedSec !== undefined ? `${recastProgress.elapsedSec.toFixed(1)}s` : ''}
+        </span>
       </div>
-      <span style="font-size:11px;color:#aaa;font-style:italic;">${recastProgress.statusText}</span>
+
+      <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:#bbb;margin-bottom:4px;">
+        ${recastProgress.thoughtTokens ? `<span style="color:#fbbf24;">💭 Thought tokens: <b>${recastProgress.thoughtTokens}</b></span>` : ''}
+        ${recastProgress.wordCount ? `<span style="color:#34d399;">📝 Output words: <b>${recastProgress.wordCount}</b></span>` : ''}
+      </div>
+
+      <div style="font-size:11.5px;color:#ddd;margin-bottom:6px;">${recastProgress.statusText}</div>
+
+      ${recastProgress.streamPreview ? `
+        <div style="font-family:monospace;font-size:10.5px;color:#a5f3fc;background:#141416;border-radius:4px;padding:5px 8px;max-height:42px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid #333;margin-bottom:6px;">
+          ${recastProgress.streamPreview}
+        </div>
+      ` : ''}
+
+      <div style="background:#262626;height:4px;border-radius:2px;overflow:hidden;">
+        <div style="background:#a78bfa;height:100%;width:${(recastProgress.currentPassIndex / recastProgress.totalPasses) * 100}%;transition:width 0.3s ease;"></div>
+      </div>
     `;
     container.appendChild(progBox);
   }
@@ -114,13 +149,13 @@ export function renderRecastPanel(
 
   const sHeader = document.createElement('div');
   sHeader.className = 'lr-panel-header';
-  sHeader.innerHTML = `<span>⚙️ Pipeline Mode & Presets</span>`;
+  sHeader.innerHTML = `<span>⚙️ Pipeline Settings & Model Speed Controls</span>`;
   settingsPanel.appendChild(sHeader);
 
   const sBody = document.createElement('div');
   sBody.className = 'lr-panel-body';
 
-  // Auto-run checkbox & Apply Mode row
+  // Row 1: Apply Mode & Min Characters
   const row1 = document.createElement('div');
   row1.className = 'recast-row-2col';
 
@@ -154,7 +189,7 @@ export function renderRecastPanel(
 
   // Min characters
   const minCharCol = document.createElement('div');
-  minCharCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Min Characters:</label>`;
+  minCharCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Min Characters to Trigger:</label>`;
   const minCharInput = document.createElement('input');
   minCharInput.type = 'number';
   minCharInput.className = 'lr-select';
@@ -174,6 +209,113 @@ export function renderRecastPanel(
 
   sBody.appendChild(row1);
 
+  // Row 2: Default Connection Profile & Model Override
+  const row2 = document.createElement('div');
+  row2.className = 'recast-row-2col';
+
+  // Default Connection Profile
+  const connCol = document.createElement('div');
+  connCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Default Connection Profile:</label>`;
+  const connSelect = document.createElement('select');
+  connSelect.className = 'lr-select';
+  const defConnOpt = document.createElement('option');
+  defConnOpt.value = '';
+  defConnOpt.textContent = 'Use System Default Connection';
+  connSelect.appendChild(defConnOpt);
+  availableConnections.forEach((c) => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.name} (${c.provider || 'custom'})${c.is_default ? ' [Default]' : ''}`;
+    opt.selected = c.id === (recastSettings.defaultConnectionId || '');
+    connSelect.appendChild(opt);
+  });
+  connSelect.onchange = () => {
+    recastSettings.defaultConnectionId = connSelect.value;
+    hostCtx?.sendToBackend({
+      type: 'RECAST_UPDATE_SETTINGS',
+      settings: { defaultConnectionId: connSelect.value }
+    });
+  };
+  connCol.appendChild(connSelect);
+  row2.appendChild(connCol);
+
+  // Default Model Override
+  const modelCol = document.createElement('div');
+  modelCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Default Model Override:</label>`;
+  const modelInput = document.createElement('input');
+  modelInput.type = 'text';
+  modelInput.className = 'lr-select';
+  modelInput.placeholder = '(Inherit from Connection Profile)';
+  modelInput.value = recastSettings.defaultModelOverride || '';
+  modelInput.title = 'Specify a fast model ID (e.g. google/gemini-2.0-flash, deepseek/deepseek-chat)';
+  modelInput.onchange = () => {
+    recastSettings.defaultModelOverride = modelInput.value.trim();
+    hostCtx?.sendToBackend({
+      type: 'RECAST_UPDATE_SETTINGS',
+      settings: { defaultModelOverride: modelInput.value.trim() }
+    });
+  };
+  modelCol.appendChild(modelInput);
+  row2.appendChild(modelCol);
+
+  sBody.appendChild(row2);
+
+  // Row 3: Reasoning Effort & First-Word Timeout (TTFT)
+  const row3 = document.createElement('div');
+  row3.className = 'recast-row-2col';
+
+  // Default Reasoning Effort
+  const reasonCol = document.createElement('div');
+  reasonCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Reasoning / Thinking Effort:</label>`;
+  const reasonSelect = document.createElement('select');
+  reasonSelect.className = 'lr-select';
+  const reasonEfforts: Array<{ id: RecastReasoningEffort; label: string }> = [
+    { id: 'off', label: '🚀 Off (Fastest — No Thinking Phase)' },
+    { id: 'inherit', label: 'Inherit Connection Default' },
+    { id: 'low', label: '⚡ Low Thinking Budget' },
+    { id: 'medium', label: 'Medium Thinking Budget' },
+    { id: 'high', label: 'High Thinking Budget' }
+  ];
+  reasonEfforts.forEach((r) => {
+    const opt = document.createElement('option');
+    opt.value = r.id;
+    opt.textContent = r.label;
+    opt.selected = r.id === (recastSettings.defaultReasoningEffort || 'off');
+    reasonSelect.appendChild(opt);
+  });
+  reasonSelect.onchange = () => {
+    recastSettings.defaultReasoningEffort = reasonSelect.value as any;
+    hostCtx?.sendToBackend({
+      type: 'RECAST_UPDATE_SETTINGS',
+      settings: { defaultReasoningEffort: reasonSelect.value as any }
+    });
+  };
+  reasonCol.appendChild(reasonSelect);
+  row3.appendChild(reasonCol);
+
+  // TTFT Timeout
+  const ttftCol = document.createElement('div');
+  ttftCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">First Word Timeout (TTFT Seconds):</label>`;
+  const ttftInput = document.createElement('input');
+  ttftInput.type = 'number';
+  ttftInput.className = 'lr-select';
+  ttftInput.min = '5';
+  ttftInput.max = '120';
+  ttftInput.value = String(recastSettings.defaultTtftTimeoutSec ?? 20);
+  ttftInput.title = 'Abort pass if no response begins within this many seconds';
+  ttftInput.onchange = () => {
+    const val = parseInt(ttftInput.value, 10) || 20;
+    recastSettings.defaultTtftTimeoutSec = val;
+    hostCtx?.sendToBackend({
+      type: 'RECAST_UPDATE_SETTINGS',
+      settings: { defaultTtftTimeoutSec: val }
+    });
+  };
+  ttftCol.appendChild(ttftInput);
+  row3.appendChild(ttftCol);
+
+  sBody.appendChild(row3);
+
   // Auto-run toggle
   const autoRunLabel = document.createElement('label');
   autoRunLabel.style.display = 'flex';
@@ -182,6 +324,7 @@ export function renderRecastPanel(
   autoRunLabel.style.fontSize = '11.5px';
   autoRunLabel.style.color = '#ccc';
   autoRunLabel.style.cursor = 'pointer';
+  autoRunLabel.style.marginTop = '4px';
   const autoRunCheckbox = document.createElement('input');
   autoRunCheckbox.type = 'checkbox';
   autoRunCheckbox.checked = recastSettings.autoRun;
@@ -201,7 +344,7 @@ export function renderRecastPanel(
   // Preset Selector Bar
   const presetBar = document.createElement('div');
   presetBar.className = 'lr-deck-bar';
-  presetBar.style.marginTop = '4px';
+  presetBar.style.marginTop = '8px';
 
   const presetSelect = document.createElement('select');
   presetSelect.className = 'lr-select';
@@ -294,6 +437,12 @@ export function renderRecastPanel(
       contextLength: 5,
       prompt: 'You are an editor. Edit <text_to_transform> to improve dialogue and character voice.\nReturn only the rewritten text.',
       connection: '',
+      modelOverride: '',
+      reasoningEffort: 'off',
+      maxTokens: 1000,
+      temperature: 0.3,
+      ttftTimeoutSec: 20,
+      passTimeoutSec: 60,
       injectWorldInfo: false,
       includeCharCard: true,
       includeSceneContext: true
@@ -440,7 +589,7 @@ export function renderRecastPanel(
       const details = document.createElement('div');
       details.className = 'recast-pass-details';
 
-      // Row: Context Length & Connection Profile
+      // Row A: Context Length & Connection Profile
       const paramRow = document.createElement('div');
       paramRow.className = 'recast-row-2col';
 
@@ -464,32 +613,127 @@ export function renderRecastPanel(
       paramRow.appendChild(ctxCol);
 
       // Connection Profile
-      const connCol = document.createElement('div');
-      connCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Connection Profile:</label>`;
-      const connSelect = document.createElement('select');
-      connSelect.className = 'lr-select';
+      const pConnCol = document.createElement('div');
+      pConnCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Connection Profile:</label>`;
+      const pConnSelect = document.createElement('select');
+      pConnSelect.className = 'lr-select';
       const defOpt = document.createElement('option');
       defOpt.value = '';
-      defOpt.textContent = 'Active / Default Profile';
-      connSelect.appendChild(defOpt);
+      defOpt.textContent = 'Inherit Global / Default';
+      pConnSelect.appendChild(defOpt);
       availableConnections.forEach((c) => {
         const opt = document.createElement('option');
         opt.value = c.id;
-        opt.textContent = `${c.name}${c.is_default ? ' (Default)' : ''}`;
+        opt.textContent = `${c.name}${c.is_default ? ' [Default]' : ''}`;
         opt.selected = c.id === pass.connection;
-        connSelect.appendChild(opt);
+        pConnSelect.appendChild(opt);
       });
-      connSelect.onchange = () => {
-        pass.connection = connSelect.value;
+      pConnSelect.onchange = () => {
+        pass.connection = pConnSelect.value;
         hostCtx?.sendToBackend({
           type: 'RECAST_UPDATE_PRESET',
           preset: activePreset
         });
       };
-      connCol.appendChild(connSelect);
-      paramRow.appendChild(connCol);
+      pConnCol.appendChild(pConnSelect);
+      paramRow.appendChild(pConnCol);
 
       details.appendChild(paramRow);
+
+      // Row B: Model Override & Reasoning Effort
+      const modelReasonRow = document.createElement('div');
+      modelReasonRow.className = 'recast-row-2col';
+
+      // Model Override
+      const pModelCol = document.createElement('div');
+      pModelCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Model Override:</label>`;
+      const pModelInput = document.createElement('input');
+      pModelInput.type = 'text';
+      pModelInput.className = 'lr-select';
+      pModelInput.placeholder = '(Inherit from Connection)';
+      pModelInput.value = pass.modelOverride || '';
+      pModelInput.onchange = () => {
+        pass.modelOverride = pModelInput.value.trim();
+        hostCtx?.sendToBackend({
+          type: 'RECAST_UPDATE_PRESET',
+          preset: activePreset
+        });
+      };
+      pModelCol.appendChild(pModelInput);
+      modelReasonRow.appendChild(pModelCol);
+
+      // Reasoning Effort
+      const pReasonCol = document.createElement('div');
+      pReasonCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Reasoning Effort:</label>`;
+      const pReasonSelect = document.createElement('select');
+      pReasonSelect.className = 'lr-select';
+      const passReasonEfforts: Array<{ id: RecastReasoningEffort; label: string }> = [
+        { id: 'off', label: '🚀 Off (No Thinking)' },
+        { id: 'inherit', label: 'Inherit Global Setting' },
+        { id: 'low', label: '⚡ Low Effort' },
+        { id: 'medium', label: 'Medium Effort' },
+        { id: 'high', label: 'High Effort' }
+      ];
+      passReasonEfforts.forEach((r) => {
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = r.label;
+        opt.selected = r.id === (pass.reasoningEffort || 'off');
+        pReasonSelect.appendChild(opt);
+      });
+      pReasonSelect.onchange = () => {
+        pass.reasoningEffort = pReasonSelect.value as any;
+        hostCtx?.sendToBackend({
+          type: 'RECAST_UPDATE_PRESET',
+          preset: activePreset
+        });
+      };
+      pReasonCol.appendChild(pReasonSelect);
+      modelReasonRow.appendChild(pReasonCol);
+
+      details.appendChild(modelReasonRow);
+
+      // Row C: Timeouts (TTFT & Pass Duration)
+      const timeoutRow = document.createElement('div');
+      timeoutRow.className = 'recast-row-2col';
+
+      const pTtftCol = document.createElement('div');
+      pTtftCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">First-Token Timeout (s):</label>`;
+      const pTtftInput = document.createElement('input');
+      pTtftInput.type = 'number';
+      pTtftInput.className = 'lr-select';
+      pTtftInput.min = '5';
+      pTtftInput.max = '120';
+      pTtftInput.value = String(pass.ttftTimeoutSec ?? 20);
+      pTtftInput.onchange = () => {
+        pass.ttftTimeoutSec = parseInt(pTtftInput.value, 10) || 20;
+        hostCtx?.sendToBackend({
+          type: 'RECAST_UPDATE_PRESET',
+          preset: activePreset
+        });
+      };
+      pTtftCol.appendChild(pTtftInput);
+      timeoutRow.appendChild(pTtftCol);
+
+      const pPassTimeCol = document.createElement('div');
+      pPassTimeCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Max Pass Duration (s):</label>`;
+      const pPassTimeInput = document.createElement('input');
+      pPassTimeInput.type = 'number';
+      pPassTimeInput.className = 'lr-select';
+      pPassTimeInput.min = '10';
+      pPassTimeInput.max = '300';
+      pPassTimeInput.value = String(pass.passTimeoutSec ?? 60);
+      pPassTimeInput.onchange = () => {
+        pass.passTimeoutSec = parseInt(pPassTimeInput.value, 10) || 60;
+        hostCtx?.sendToBackend({
+          type: 'RECAST_UPDATE_PRESET',
+          preset: activePreset
+        });
+      };
+      pPassTimeCol.appendChild(pPassTimeInput);
+      timeoutRow.appendChild(pPassTimeCol);
+
+      details.appendChild(timeoutRow);
 
       // Injections Checkboxes
       const injGroup = document.createElement('div');
@@ -534,7 +778,7 @@ export function renderRecastPanel(
       wiLabel.className = 'recast-checkbox-label';
       const wiChk = document.createElement('input');
       wiChk.type = 'checkbox';
-      wiChk.checked = Boolean(pass.injectWorldInfo);
+      wiChk.checked = pass.injectWorldInfo === true;
       wiChk.onchange = () => {
         pass.injectWorldInfo = wiChk.checked;
         hostCtx?.sendToBackend({
@@ -548,27 +792,52 @@ export function renderRecastPanel(
 
       details.appendChild(injGroup);
 
-      // Prompt Textarea
+      // System Prompt Editor
       const promptLabel = document.createElement('label');
       promptLabel.style.display = 'block';
       promptLabel.style.fontSize = '10.5px';
       promptLabel.style.color = '#aaa';
-      promptLabel.innerHTML = `Pass Prompt <span style="font-size:10px;color:#a78bfa;">(&lt;text_to_transform&gt; will be injected)</span>:`;
+      promptLabel.style.marginBottom = '3px';
+      promptLabel.textContent = 'Pass System Prompt:';
       details.appendChild(promptLabel);
 
-      const promptTextarea = document.createElement('textarea');
-      promptTextarea.className = 'recast-textarea';
-      promptTextarea.value = pass.prompt;
-      promptTextarea.rows = 5;
-      promptTextarea.onchange = () => {
-        pass.prompt = promptTextarea.value;
+      const promptArea = document.createElement('textarea');
+      promptArea.className = 'recast-prompt-editor';
+      promptArea.rows = 7;
+      promptArea.value = pass.prompt;
+      promptArea.placeholder = 'Enter instructions for this pass. Must instruct returning the modified text.';
+      promptArea.onchange = () => {
+        pass.prompt = promptArea.value;
         hostCtx?.sendToBackend({
           type: 'RECAST_UPDATE_PRESET',
           preset: activePreset
         });
       };
-      details.appendChild(promptTextarea);
+      details.appendChild(promptArea);
 
+      // Prefill Section
+      const prefillRow = document.createElement('div');
+      prefillRow.style.display = 'flex';
+      prefillRow.style.gap = '8px';
+      prefillRow.style.marginTop = '6px';
+      prefillRow.style.alignItems = 'center';
+
+      const prefillInput = document.createElement('input');
+      prefillInput.type = 'text';
+      prefillInput.className = 'lr-select';
+      prefillInput.style.flex = '1';
+      prefillInput.placeholder = 'Optional Assistant Prefill (e.g. ```text or Sure, here is the text:)';
+      prefillInput.value = pass.prefill || '';
+      prefillInput.onchange = () => {
+        pass.prefill = prefillInput.value;
+        hostCtx?.sendToBackend({
+          type: 'RECAST_UPDATE_PRESET',
+          preset: activePreset
+        });
+      };
+      prefillRow.appendChild(prefillInput);
+
+      details.appendChild(prefillRow);
       item.appendChild(details);
     }
 

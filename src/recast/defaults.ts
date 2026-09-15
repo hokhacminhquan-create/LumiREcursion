@@ -18,6 +18,12 @@ When a character announces an action and then immediately executes it or time pa
 
 Return only the rewritten text. No explanations, no notes, no commentary.`,
   connection: '',
+  modelOverride: '',
+  reasoningEffort: 'off',
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: true,
   includeCharCard: true,
   includeSceneContext: true
@@ -46,6 +52,12 @@ Also following are behaviors from characters that should be modified or removed 
 
 Return only the corrected text. No explanations, no commentary.`,
   connection: '',
+  modelOverride: '',
+  reasoningEffort: 'off',
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: true,
   includeSceneContext: true
@@ -78,6 +90,12 @@ Use the scene context only to match the established prose tone and style of the 
 
 Return only the rewritten text. No explanations, no notes, no commentary.`,
   connection: '',
+  modelOverride: '',
+  reasoningEffort: 'off',
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -97,6 +115,12 @@ Rules:
 
 Return only the rewritten text. No explanations, no notes, no commentary. Think only once to avoid overthinking.`,
   connection: '',
+  modelOverride: '',
+  reasoningEffort: 'off',
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -119,5 +143,11 @@ export const DEFAULT_RECAST_SETTINGS: RecastSettings = {
   applyMode: 'diff',
   minChars: 30,
   activePresetId: 'default_recast_preset',
-  presets: [DEFAULT_RECAST_PRESET]
+  presets: [DEFAULT_RECAST_PRESET],
+  defaultConnectionId: '',
+  defaultModelOverride: '',
+  defaultReasoningEffort: 'off',
+  defaultTtftTimeoutSec: 20,
+  defaultPassTimeoutSec: 60,
+  maxTokens: 1000
 };

@@ -338,6 +338,12 @@ When a character announces an action and then immediately executes it or time pa
 
 Return only the rewritten text. No explanations, no notes, no commentary.`,
   connection: "",
+  modelOverride: "",
+  reasoningEffort: "off",
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: true,
   includeCharCard: true,
   includeSceneContext: true
@@ -365,6 +371,12 @@ Also following are behaviors from characters that should be modified or removed 
 
 Return only the corrected text. No explanations, no commentary.`,
   connection: "",
+  modelOverride: "",
+  reasoningEffort: "off",
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: true,
   includeSceneContext: true
@@ -396,6 +408,12 @@ Use the scene context only to match the established prose tone and style of the 
 
 Return only the rewritten text. No explanations, no notes, no commentary.`,
   connection: "",
+  modelOverride: "",
+  reasoningEffort: "off",
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -414,6 +432,12 @@ Rules:
 
 Return only the rewritten text. No explanations, no notes, no commentary. Think only once to avoid overthinking.`,
   connection: "",
+  modelOverride: "",
+  reasoningEffort: "off",
+  maxTokens: 1000,
+  temperature: 0.3,
+  ttftTimeoutSec: 20,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -434,7 +458,13 @@ var DEFAULT_RECAST_SETTINGS = {
   applyMode: "diff",
   minChars: 30,
   activePresetId: "default_recast_preset",
-  presets: [DEFAULT_RECAST_PRESET]
+  presets: [DEFAULT_RECAST_PRESET],
+  defaultConnectionId: "",
+  defaultModelOverride: "",
+  defaultReasoningEffort: "off",
+  defaultTtftTimeoutSec: 20,
+  defaultPassTimeoutSec: 60,
+  maxTokens: 1000
 };
 
 // src/storage.ts
@@ -1217,9 +1247,10 @@ function cleanModelOutput(text) {
   }
   return cleaned;
 }
-async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId, defaultConnectionId) {
+async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId, settings, defaultConnectionId, onStreamUpdate) {
   if (!pass.enabled)
     return textToTransform;
+  const tStart = Date.now();
   let systemPrompt = pass.prompt.trim();
   let charCardXml = "";
   if (pass.includeCharCard && sp?.characters?.get) {
@@ -1335,16 +1366,14 @@ ${textToTransform}
     });
   }
   let selectedConn = null;
+  const targetConnId = pass.connection || settings?.defaultConnectionId || defaultConnectionId;
   if (sp?.connections?.list) {
     try {
       const conns = await sp.connections.list(userId);
       const connList = Array.isArray(conns) ? conns : conns?.data || [];
       if (connList.length > 0) {
-        if (pass.connection) {
-          selectedConn = connList.find((c) => c.id === pass.connection);
-        }
-        if (!selectedConn && defaultConnectionId) {
-          selectedConn = connList.find((c) => c.id === defaultConnectionId);
+        if (targetConnId) {
+          selectedConn = connList.find((c) => c.id === targetConnId);
         }
         if (!selectedConn) {
           selectedConn = connList.find((c) => c.is_default);
@@ -1357,37 +1386,120 @@ ${textToTransform}
       console.warn("[Lumi:REcursion:Recast] Failed to query connection profiles:", err);
     }
   }
+  const effectiveConnId = selectedConn?.id || targetConnId;
+  if (!effectiveConnId) {
+    throw new Error("No AI connection profile configured. Please add a connection in Lumiverse.");
+  }
+  const effectiveModel = pass.modelOverride && pass.modelOverride.trim() || settings?.defaultModelOverride && settings.defaultModelOverride.trim() || selectedConn?.model || "";
+  const effectiveReasoning = pass.reasoningEffort || settings?.defaultReasoningEffort || "off";
+  let reasoningParam = undefined;
+  if (effectiveReasoning === "off") {
+    reasoningParam = { source: "off", apiReasoning: false };
+  } else if (effectiveReasoning !== "inherit") {
+    reasoningParam = { source: "custom", apiReasoning: true, effort: effectiveReasoning };
+  }
+  const maxTokens = pass.maxTokens ?? settings?.maxTokens ?? 1000;
+  const temperature = pass.temperature ?? 0.3;
+  const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 20;
+  const passTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 60;
+  const abortController = new AbortController;
+  let hasReceivedFirstToken = false;
+  let ttftTimer = null;
+  let passTimer = null;
+  if (ttftTimeoutSec > 0) {
+    ttftTimer = setTimeout(() => {
+      if (!hasReceivedFirstToken) {
+        abortController.abort(new Error(`First token timeout: model took more than ${ttftTimeoutSec}s to respond. Check your provider latency or switch model.`));
+      }
+    }, ttftTimeoutSec * 1000);
+  }
+  if (passTimeoutSec > 0) {
+    passTimer = setTimeout(() => {
+      abortController.abort(new Error(`Pass timeout: exceeded ${passTimeoutSec}s total duration.`));
+    }, passTimeoutSec * 1000);
+  }
   const genPayload = {
     type: "raw",
     messages,
+    connection_id: effectiveConnId,
     parameters: {
-      temperature: 0.3
+      temperature,
+      max_tokens: maxTokens
     },
-    ...userId ? { userId } : {}
+    ...effectiveModel ? { model: effectiveModel } : {},
+    ...selectedConn?.provider ? { provider: selectedConn.provider } : {},
+    ...reasoningParam ? { reasoning: reasoningParam } : {},
+    ...userId ? { userId } : {},
+    signal: abortController.signal
   };
-  if (selectedConn) {
-    genPayload.connection_id = selectedConn.id;
-    if (selectedConn.model) {
-      genPayload.model = selectedConn.model;
-    }
-    if (selectedConn.provider) {
-      genPayload.provider = selectedConn.provider;
-    }
-  } else if (pass.connection) {
-    genPayload.connection_id = pass.connection;
-  } else if (defaultConnectionId) {
-    genPayload.connection_id = defaultConnectionId;
-  } else {
-    throw new Error("No AI connection found. Please configure a connection profile in Lumiverse.");
-  }
-  console.log(`[Lumi:REcursion:Recast] Pass "${pass.name}" dispatching to connection:`, genPayload.connection_id, "model:", genPayload.model || "(default)");
-  const rawRes = await sp.generate.raw(genPayload);
+  console.log(`[Lumi:REcursion:Recast] Starting pass "${pass.name}" [conn: ${effectiveConnId}, model: ${effectiveModel || "(conn default)"}, reasoning: ${effectiveReasoning}, max_tokens: ${maxTokens}, ttft_limit: ${ttftTimeoutSec}s]`);
   let outputText = "";
-  if (typeof rawRes === "string") {
-    outputText = rawRes;
-  } else if (rawRes && typeof rawRes === "object") {
-    outputText = rawRes.content || rawRes.text || rawRes.message?.content || "";
+  let thoughtTokens = 0;
+  let wordCount = 0;
+  let currentPhase = "connecting";
+  let lastProgressReport = 0;
+  const reportStream = (force = false) => {
+    const now = Date.now();
+    if (!force && now - lastProgressReport < 120)
+      return;
+    lastProgressReport = now;
+    const elapsedSec = (now - tStart) / 1000;
+    const preview = outputText.slice(-80).replace(/\s+/g, " ").trim();
+    onStreamUpdate?.({
+      phase: currentPhase,
+      thoughtTokens,
+      wordCount,
+      elapsedSec,
+      streamPreview: preview
+    });
+  };
+  reportStream(true);
+  try {
+    if (typeof sp?.generate?.rawStream === "function") {
+      const stream = sp.generate.rawStream(genPayload);
+      for await (const chunk of stream) {
+        if (!hasReceivedFirstToken) {
+          hasReceivedFirstToken = true;
+          if (ttftTimer) {
+            clearTimeout(ttftTimer);
+            ttftTimer = null;
+          }
+        }
+        if (chunk.type === "reasoning" || chunk.reasoning) {
+          thoughtTokens++;
+          currentPhase = "thinking";
+          reportStream();
+        } else if (chunk.type === "token" || chunk.token) {
+          const t = chunk.token || "";
+          outputText += t;
+          currentPhase = "generating";
+          wordCount = outputText.trim() ? outputText.trim().split(/\s+/).length : 0;
+          reportStream();
+        } else if (chunk.type === "done") {
+          if (chunk.content && !outputText) {
+            outputText = chunk.content;
+          }
+        }
+      }
+    } else {
+      const rawRes = await sp.generate.raw(genPayload);
+      if (typeof rawRes === "string") {
+        outputText = rawRes;
+      } else if (rawRes && typeof rawRes === "object") {
+        outputText = rawRes.content || rawRes.text || rawRes.message?.content || "";
+      }
+    }
+  } catch (err) {
+    const isAborted = abortController.signal.aborted || err?.name === "AbortError";
+    const abortReason = abortController.signal.reason?.message || err?.message || String(err);
+    throw new Error(isAborted ? abortReason : err?.message || String(err));
+  } finally {
+    if (ttftTimer)
+      clearTimeout(ttftTimer);
+    if (passTimer)
+      clearTimeout(passTimer);
   }
+  reportStream(true);
   const cleaned = cleanModelOutput(outputText);
   return cleaned && cleaned.length > 0 ? cleaned : textToTransform;
 }
@@ -1416,10 +1528,37 @@ async function runRecastPipeline(sp, options) {
       currentPassIndex: i + 1,
       totalPasses: enabledPasses.length,
       currentPassName: pass.name,
-      statusText: `Running pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`
+      statusText: `Connecting pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`,
+      phase: "connecting",
+      elapsedSec: (Date.now() - tStart) / 1000,
+      thoughtTokens: 0,
+      wordCount: 0,
+      streamPreview: ""
     });
     try {
-      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId, defaultConnectionId);
+      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId, settings, defaultConnectionId, (streamInfo) => {
+        const totalElapsed = (Date.now() - tStart) / 1000;
+        let statusDesc = `[${streamInfo.elapsedSec.toFixed(1)}s] `;
+        if (streamInfo.phase === "thinking") {
+          statusDesc += `Thinking (\uD83D\uDCAD ${streamInfo.thoughtTokens} tokens)...`;
+        } else if (streamInfo.phase === "generating") {
+          statusDesc += `Generating prose (\uD83D\uDCDD ${streamInfo.wordCount} words)...`;
+        } else {
+          statusDesc += `Connecting to provider...`;
+        }
+        onProgress?.({
+          active: true,
+          currentPassIndex: i + 1,
+          totalPasses: enabledPasses.length,
+          currentPassName: pass.name,
+          statusText: statusDesc,
+          phase: streamInfo.phase,
+          elapsedSec: totalElapsed,
+          thoughtTokens: streamInfo.thoughtTokens,
+          wordCount: streamInfo.wordCount,
+          streamPreview: streamInfo.streamPreview
+        });
+      });
       currentText = passOutput;
       snapshots.push(currentText);
     } catch (err) {
@@ -1439,7 +1578,9 @@ async function runRecastPipeline(sp, options) {
     currentPassIndex: enabledPasses.length,
     totalPasses: enabledPasses.length,
     currentPassName: "",
-    statusText: `Complete in ${totalLatencyMs}ms`
+    statusText: `Complete in ${(totalLatencyMs / 1000).toFixed(1)}s`,
+    phase: "done",
+    elapsedSec: totalLatencyMs / 1000
   });
   return {
     chatId,

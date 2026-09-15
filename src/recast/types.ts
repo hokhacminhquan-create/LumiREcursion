@@ -3,6 +3,8 @@
  * Ported and adapted from SillyTavern Recast for Lumiverse Spindle
  */
 
+export type RecastReasoningEffort = 'inherit' | 'off' | 'low' | 'medium' | 'high';
+
 export interface RecastPass {
   id: string;
   name: string;
@@ -12,6 +14,12 @@ export interface RecastPass {
   prefill?: string;
   prefillRole?: 'assistant' | 'system' | 'user';
   connection?: string;   // Optional Connection Profile ID override
+  modelOverride?: string; // Optional Model name override (e.g. "google/gemini-2.0-flash", "deepseek/deepseek-chat")
+  reasoningEffort?: RecastReasoningEffort; // 'off' disables thinking for 5x-10x speedup
+  maxTokens?: number;    // Cap output tokens (default: 1000)
+  temperature?: number;  // Temperature (default: 0.3)
+  ttftTimeoutSec?: number; // Time-to-first-token timeout in seconds (default: 20)
+  passTimeoutSec?: number; // Total pass timeout in seconds (default: 60)
   injectWorldInfo?: boolean;
   includeCharCard?: boolean;
   includeSceneContext?: boolean;
@@ -32,6 +40,13 @@ export interface RecastSettings {
   minChars: number;
   activePresetId: string;
   presets: RecastPreset[];
+  // Global defaults & fallbacks
+  defaultConnectionId?: string;
+  defaultModelOverride?: string;
+  defaultReasoningEffort?: RecastReasoningEffort;
+  defaultTtftTimeoutSec?: number; // default: 20
+  defaultPassTimeoutSec?: number; // default: 60
+  maxTokens?: number;             // default: 1000
 }
 
 export interface RecastDiffStep {
@@ -59,4 +74,9 @@ export interface RecastProgress {
   totalPasses: number;
   currentPassName: string;
   statusText: string;
+  phase?: 'connecting' | 'thinking' | 'generating' | 'done' | 'error';
+  elapsedSec?: number;
+  thoughtTokens?: number;
+  wordCount?: number;
+  streamPreview?: string; // Live snippet of streaming generation
 }
