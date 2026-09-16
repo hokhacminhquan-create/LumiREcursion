@@ -344,8 +344,8 @@ Return only the complete grounded narrative. No explanations, no notes, no comme
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: true,
   includeCharCard: true,
   includeSceneContext: true
@@ -380,8 +380,8 @@ Return only the complete narrative with character adjustments applied. No explan
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: true,
   includeSceneContext: true
@@ -409,8 +409,8 @@ Return only the complete, polished narrative. No explanations, no notes, no comm
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -430,8 +430,8 @@ Return only the complete narrative with repetitions resolved. No explanations, n
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -456,8 +456,8 @@ var DEFAULT_RECAST_SETTINGS = {
   defaultConnectionId: "",
   defaultModelOverride: "",
   defaultReasoningEffort: "off",
-  defaultTtftTimeoutSec: 20,
-  defaultPassTimeoutSec: 90,
+  defaultTtftTimeoutSec: 30,
+  defaultPassTimeoutSec: 60,
   maxTokens: 4096,
   protectTagsAndHtml: true
 };
@@ -1914,24 +1914,39 @@ ${textToTransform}
   const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 4096;
   const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.5)));
   const temperature = pass.temperature ?? 0.3;
-  const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 20;
-  const basePassTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 90;
-  const effectivePassTimeoutSec = Math.max(basePassTimeoutSec, Math.ceil(estimatedInputTokens * 0.1) + 45);
+  const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 30;
+  const inactivityTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 60;
+  const absoluteCeilingSec = 1800;
   const abortController = new AbortController;
   let hasReceivedFirstToken = false;
   let ttftTimer = null;
-  let passTimer = null;
+  let inactivityTimer = null;
+  let ceilingTimer = null;
+  let lastTokenTime = Date.now();
+  const resetInactivityTimer = () => {
+    lastTokenTime = Date.now();
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+    if (inactivityTimeoutSec > 0) {
+      inactivityTimer = setTimeout(() => {
+        const silentSec = Math.round((Date.now() - lastTokenTime) / 1000);
+        abortController.abort(new Error(`Stream stall: no tokens or reasoning received for ${silentSec}s (inactivity limit: ${inactivityTimeoutSec}s). Stream stalled.`));
+      }, inactivityTimeoutSec * 1000);
+    }
+  };
   if (ttftTimeoutSec > 0) {
     ttftTimer = setTimeout(() => {
       if (!hasReceivedFirstToken) {
-        abortController.abort(new Error(`First token timeout: model took more than ${ttftTimeoutSec}s to respond. Check your provider latency or switch model.`));
+        abortController.abort(new Error(`First token timeout: model took more than ${ttftTimeoutSec}s to respond. Check your provider connection.`));
       }
     }, ttftTimeoutSec * 1000);
   }
-  if (effectivePassTimeoutSec > 0) {
-    passTimer = setTimeout(() => {
-      abortController.abort(new Error(`Pass timeout: exceeded ${effectivePassTimeoutSec}s total duration.`));
-    }, effectivePassTimeoutSec * 1000);
+  if (absoluteCeilingSec > 0) {
+    ceilingTimer = setTimeout(() => {
+      abortController.abort(new Error(`Absolute maximum pass duration (${absoluteCeilingSec}s) reached.`));
+    }, absoluteCeilingSec * 1000);
   }
   const genPayload = {
     type: "raw",
@@ -1980,6 +1995,7 @@ ${textToTransform}
             ttftTimer = null;
           }
         }
+        resetInactivityTimer();
         if (chunk.type === "reasoning" || chunk.reasoning) {
           thoughtTokens++;
           currentPhase = "thinking";
@@ -2011,8 +2027,10 @@ ${textToTransform}
   } finally {
     if (ttftTimer)
       clearTimeout(ttftTimer);
-    if (passTimer)
-      clearTimeout(passTimer);
+    if (inactivityTimer)
+      clearTimeout(inactivityTimer);
+    if (ceilingTimer)
+      clearTimeout(ceilingTimer);
   }
   reportStream(true);
   const cleaned = cleanModelOutput(outputText);
@@ -2123,11 +2141,15 @@ async function runRecastPipeline(sp, options) {
     currentText = normalizeProtectionPlaceholders(currentText, protectedData.placeholders);
     snapshots.push(restoreProtectedBlocks(currentText, protectedData));
   }
-  if (successfulPasses === 0 && errors.length > 0) {
-    throw new Error(`All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join("; ")}`);
-  }
   const totalLatencyMs = Date.now() - tStart;
   const finalTransformedText = restoreProtectedBlocks(currentText, protectedData);
+  const hasTextChanges = finalTransformedText !== rawText;
+  if (!hasTextChanges && errors.length > 0) {
+    throw new Error(`All passes failed to transform text: ${errors.map((e) => `[${e.passName}]: ${e.error}`).join("; ")}`);
+  }
+  if (errors.length > 0 && hasTextChanges) {
+    sp?.toast?.warning?.(`Recast completed with partial edits (${errors.length} scene/pass warning${errors.length === 1 ? "" : "s"}).`);
+  }
   onProgress?.({
     active: false,
     currentPassIndex: enabledPasses.length,
@@ -2337,7 +2359,7 @@ async function resolveTurnCards(context) {
         });
         if (diff && diff.transformedText && diff.transformedText !== diff.originalText) {
           if (recastSettings.applyMode === "replace") {
-            await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText });
+            await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText }, uId);
             sp.toast?.success?.("\u2728 Recast post-processing applied in-place");
             sp.sendToFrontend?.({
               type: "RECAST_APPLIED",
@@ -2352,9 +2374,10 @@ async function resolveTurnCards(context) {
             const newSwipes = [...existingSwipes, diff.transformedText];
             const newSwipeId = newSwipes.length - 1;
             await sp.chat.updateMessage(diff.chatId, diff.messageId, {
+              content: diff.transformedText,
               swipes: newSwipes,
               swipe_id: newSwipeId
-            });
+            }, uId);
             sp.toast?.success?.("\u2728 Recast post-processing added as new swipe");
             sp.sendToFrontend?.({
               type: "RECAST_APPLIED",
@@ -2365,9 +2388,13 @@ async function resolveTurnCards(context) {
           } else {
             sp.sendToFrontend?.({ type: "RECAST_DIFF_READY", diff });
           }
+        } else {
+          sp.toast?.info?.("\u2139\uFE0F Recast finished: text was unchanged.");
         }
       } catch (err) {
         console.error("[Lumi:REcursion:Recast] Error during auto-recast:", err);
+        const errMsg = err?.message || String(err);
+        sp.toast?.error?.(`\u274C Auto-recast failed: ${errMsg}`);
       } finally {
         isRecastRunning = false;
         recastProgress = null;
@@ -2891,11 +2918,40 @@ async function resolveTurnCards(context) {
             }
           });
           if (diff) {
-            sp.sendToFrontend?.({ type: "RECAST_DIFF_READY", diff });
+            if (recastSettings.applyMode === "replace") {
+              await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText }, effectiveUserId);
+              sp.toast?.success?.("\u2728 Recast post-processing applied in-place");
+              sp.sendToFrontend?.({
+                type: "RECAST_APPLIED",
+                chatId: diff.chatId,
+                messageId: diff.messageId,
+                mode: "replace"
+              });
+            } else if (recastSettings.applyMode === "swipe") {
+              const allMsgs = await sp.chat.getMessages(diff.chatId);
+              const foundMsg = allMsgs.find((m) => m.id === diff.messageId);
+              const existingSwipes = Array.isArray(foundMsg?.swipes) && foundMsg.swipes.length > 0 ? foundMsg.swipes : [diff.originalText];
+              const newSwipes = [...existingSwipes, diff.transformedText];
+              const newSwipeId = newSwipes.length - 1;
+              await sp.chat.updateMessage(diff.chatId, diff.messageId, {
+                content: diff.transformedText,
+                swipes: newSwipes,
+                swipe_id: newSwipeId
+              }, effectiveUserId);
+              sp.toast?.success?.("\u2728 Recast post-processing added as new swipe");
+              sp.sendToFrontend?.({
+                type: "RECAST_APPLIED",
+                chatId: diff.chatId,
+                messageId: diff.messageId,
+                mode: "swipe"
+              });
+            } else {
+              sp.sendToFrontend?.({ type: "RECAST_DIFF_READY", diff });
+            }
           }
         } catch (err) {
           console.error("[Lumi:REcursion:Recast] Manual recast failed:", err);
-          sp.toast?.error?.(`Recast failed: ${err?.message || err}`);
+          sp.toast?.error?.(`\u274C Recast failed: ${err?.message || err}`);
         } finally {
           isRecastRunning = false;
           recastProgress = null;
@@ -2916,7 +2972,7 @@ async function resolveTurnCards(context) {
         try {
           const { chatId, messageId, text, mode } = msg;
           if (mode === "replace") {
-            await sp.chat.updateMessage(chatId, messageId, { content: text });
+            await sp.chat.updateMessage(chatId, messageId, { content: text }, effectiveUserId);
             sp.toast?.success?.("\u2705 Recast applied in-place");
           } else if (mode === "swipe") {
             const allMsgs = await sp.chat.getMessages(chatId);
@@ -2924,7 +2980,7 @@ async function resolveTurnCards(context) {
             const existingSwipes = Array.isArray(existing?.swipes) && existing.swipes.length > 0 ? existing.swipes : [existing?.content || ""];
             const newSwipes = [...existingSwipes, text];
             const newSwipeId = newSwipes.length - 1;
-            await sp.chat.updateMessage(chatId, messageId, { swipes: newSwipes, swipe_id: newSwipeId });
+            await sp.chat.updateMessage(chatId, messageId, { content: text, swipes: newSwipes, swipe_id: newSwipeId }, effectiveUserId);
             sp.toast?.success?.("\uD83D\uDD00 Recast saved as new swipe");
           }
           sp.sendToFrontend?.({ type: "RECAST_APPLIED", chatId, messageId, mode });

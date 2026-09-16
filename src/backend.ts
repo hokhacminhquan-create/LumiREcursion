@@ -324,7 +324,7 @@ async function resolveTurnCards(
 
         if (diff && diff.transformedText && diff.transformedText !== diff.originalText) {
           if (recastSettings.applyMode === 'replace') {
-            await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText });
+            await sp.chat.updateMessage(diff.chatId, diff.messageId, { content: diff.transformedText }, uId);
             sp.toast?.success?.('✨ Recast post-processing applied in-place');
             sp.sendToFrontend?.({
               type: 'RECAST_APPLIED',
@@ -340,9 +340,10 @@ async function resolveTurnCards(
             const newSwipes = [...existingSwipes, diff.transformedText];
             const newSwipeId = newSwipes.length - 1;
             await sp.chat.updateMessage(diff.chatId, diff.messageId, {
+              content: diff.transformedText,
               swipes: newSwipes,
               swipe_id: newSwipeId
-            });
+            }, uId);
             sp.toast?.success?.('✨ Recast post-processing added as new swipe');
             sp.sendToFrontend?.({
               type: 'RECAST_APPLIED',
@@ -354,9 +355,13 @@ async function resolveTurnCards(
             // 'diff' mode: send to frontend to show the interactive comparison modal
             sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
           }
+        } else {
+          sp.toast?.info?.('ℹ️ Recast finished: text was unchanged.');
         }
       } catch (err: any) {
         console.error('[Lumi:REcursion:Recast] Error during auto-recast:', err);
+        const errMsg = err?.message || String(err);
+        sp.toast?.error?.(`❌ Auto-recast failed: ${errMsg}`);
       } finally {
         isRecastRunning = false;
         recastProgress = null;
@@ -995,11 +1000,54 @@ async function resolveTurnCards(
           });
 
           if (diff) {
-            sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
+            if (recastSettings.applyMode === 'replace') {
+              await sp.chat.updateMessage(
+                diff.chatId,
+                diff.messageId,
+                { content: diff.transformedText },
+                effectiveUserId
+              );
+              sp.toast?.success?.('✨ Recast post-processing applied in-place');
+              sp.sendToFrontend?.({
+                type: 'RECAST_APPLIED',
+                chatId: diff.chatId,
+                messageId: diff.messageId,
+                mode: 'replace'
+              });
+            } else if (recastSettings.applyMode === 'swipe') {
+              const allMsgs = await sp.chat.getMessages(diff.chatId);
+              const foundMsg = allMsgs.find((m: any) => m.id === diff.messageId);
+              const existingSwipes =
+                Array.isArray(foundMsg?.swipes) && foundMsg.swipes.length > 0
+                  ? foundMsg.swipes
+                  : [diff.originalText];
+              const newSwipes = [...existingSwipes, diff.transformedText];
+              const newSwipeId = newSwipes.length - 1;
+              await sp.chat.updateMessage(
+                diff.chatId,
+                diff.messageId,
+                {
+                  content: diff.transformedText,
+                  swipes: newSwipes,
+                  swipe_id: newSwipeId
+                },
+                effectiveUserId
+              );
+              sp.toast?.success?.('✨ Recast post-processing added as new swipe');
+              sp.sendToFrontend?.({
+                type: 'RECAST_APPLIED',
+                chatId: diff.chatId,
+                messageId: diff.messageId,
+                mode: 'swipe'
+              });
+            } else {
+              // 'diff' mode: show interactive comparison modal
+              sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
+            }
           }
         } catch (err: any) {
           console.error('[Lumi:REcursion:Recast] Manual recast failed:', err);
-          sp.toast?.error?.(`Recast failed: ${err?.message || err}`);
+          sp.toast?.error?.(`❌ Recast failed: ${err?.message || err}`);
         } finally {
           isRecastRunning = false;
           recastProgress = null;
@@ -1021,7 +1069,7 @@ async function resolveTurnCards(
         try {
           const { chatId, messageId, text, mode } = msg;
           if (mode === 'replace') {
-            await sp.chat.updateMessage(chatId, messageId, { content: text });
+            await sp.chat.updateMessage(chatId, messageId, { content: text }, effectiveUserId);
             sp.toast?.success?.('✅ Recast applied in-place');
           } else if (mode === 'swipe') {
             const allMsgs = await sp.chat.getMessages(chatId);
@@ -1032,7 +1080,12 @@ async function resolveTurnCards(
                 : [existing?.content || ''];
             const newSwipes = [...existingSwipes, text];
             const newSwipeId = newSwipes.length - 1;
-            await sp.chat.updateMessage(chatId, messageId, { swipes: newSwipes, swipe_id: newSwipeId });
+            await sp.chat.updateMessage(
+              chatId,
+              messageId,
+              { content: text, swipes: newSwipes, swipe_id: newSwipeId },
+              effectiveUserId
+            );
             sp.toast?.success?.('🔀 Recast saved as new swipe');
           }
           sp.sendToFrontend?.({ type: 'RECAST_APPLIED', chatId, messageId, mode });

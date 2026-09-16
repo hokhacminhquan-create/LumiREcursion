@@ -233,30 +233,56 @@ export async function runSinglePass(
   const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.5)));
   const temperature = pass.temperature ?? 0.3;
 
-  // Timeouts (dynamically scale pass duration for long narrative chunks)
-  const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 20;
-  const basePassTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 90;
-  const effectivePassTimeoutSec = Math.max(basePassTimeoutSec, Math.ceil(estimatedInputTokens * 0.1) + 45);
+  // Timeouts:
+  // 1. TTFT (Time-To-First-Token): Timeout waiting for model to start responding (reasoning or text)
+  const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 30;
+
+  // 2. Stream Inactivity Watchdog: Timeout based on seconds since the LAST token generated or thought.
+  //    Resets continuously on every incoming token/chunk, so active long thinking or long writing NEVER aborts!
+  const inactivityTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 60;
+
+  // 3. Absolute runaway ceiling: 1800s (30 minutes) to prevent infinite loops if an API never terminates
+  const absoluteCeilingSec = 1800;
 
   const abortController = new AbortController();
   let hasReceivedFirstToken = false;
   let ttftTimer: any = null;
-  let passTimer: any = null;
+  let inactivityTimer: any = null;
+  let ceilingTimer: any = null;
+  let lastTokenTime = Date.now();
+
+  const resetInactivityTimer = () => {
+    lastTokenTime = Date.now();
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
+    if (inactivityTimeoutSec > 0) {
+      inactivityTimer = setTimeout(() => {
+        const silentSec = Math.round((Date.now() - lastTokenTime) / 1000);
+        abortController.abort(
+          new Error(
+            `Stream stall: no tokens or reasoning received for ${silentSec}s (inactivity limit: ${inactivityTimeoutSec}s). Stream stalled.`
+          )
+        );
+      }, inactivityTimeoutSec * 1000);
+    }
+  };
 
   if (ttftTimeoutSec > 0) {
     ttftTimer = setTimeout(() => {
       if (!hasReceivedFirstToken) {
         abortController.abort(
-          new Error(`First token timeout: model took more than ${ttftTimeoutSec}s to respond. Check your provider latency or switch model.`)
+          new Error(`First token timeout: model took more than ${ttftTimeoutSec}s to respond. Check your provider connection.`)
         );
       }
     }, ttftTimeoutSec * 1000);
   }
 
-  if (effectivePassTimeoutSec > 0) {
-    passTimer = setTimeout(() => {
-      abortController.abort(new Error(`Pass timeout: exceeded ${effectivePassTimeoutSec}s total duration.`));
-    }, effectivePassTimeoutSec * 1000);
+  if (absoluteCeilingSec > 0) {
+    ceilingTimer = setTimeout(() => {
+      abortController.abort(new Error(`Absolute maximum pass duration (${absoluteCeilingSec}s) reached.`));
+    }, absoluteCeilingSec * 1000);
   }
 
   const genPayload: any = {
@@ -313,6 +339,9 @@ export async function runSinglePass(
           }
         }
 
+        // Reset stream inactivity watchdog on EVERY received token or reasoning chunk
+        resetInactivityTimer();
+
         if (chunk.type === 'reasoning' || chunk.reasoning) {
           thoughtTokens++;
           currentPhase = 'thinking';
@@ -344,7 +373,8 @@ export async function runSinglePass(
     throw new Error(isAborted ? abortReason : err?.message || String(err));
   } finally {
     if (ttftTimer) clearTimeout(ttftTimer);
-    if (passTimer) clearTimeout(passTimer);
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    if (ceilingTimer) clearTimeout(ceilingTimer);
   }
 
   reportStream(true);
@@ -528,14 +558,21 @@ export async function runRecastPipeline(
     snapshots.push(restoreProtectedBlocks(currentText, protectedData));
   }
 
-  if (successfulPasses === 0 && errors.length > 0) {
+  const totalLatencyMs = Date.now() - tStart;
+  const finalTransformedText = restoreProtectedBlocks(currentText, protectedData);
+  const hasTextChanges = finalTransformedText !== rawText;
+
+  if (!hasTextChanges && errors.length > 0) {
     throw new Error(
-      `All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join('; ')}`
+      `All passes failed to transform text: ${errors.map((e) => `[${e.passName}]: ${e.error}`).join('; ')}`
     );
   }
 
-  const totalLatencyMs = Date.now() - tStart;
-  const finalTransformedText = restoreProtectedBlocks(currentText, protectedData);
+  if (errors.length > 0 && hasTextChanges) {
+    sp?.toast?.warning?.(
+      `Recast completed with partial edits (${errors.length} scene/pass warning${errors.length === 1 ? '' : 's'}).`
+    );
+  }
 
   onProgress?.({
     active: false,

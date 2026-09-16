@@ -24,8 +24,8 @@ Return only the complete grounded narrative. No explanations, no notes, no comme
   reasoningEffort: 'off',
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: true,
   includeCharCard: true,
   includeSceneContext: true
@@ -61,8 +61,8 @@ Return only the complete narrative with character adjustments applied. No explan
   reasoningEffort: 'off',
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: true,
   includeSceneContext: true
@@ -91,8 +91,8 @@ Return only the complete, polished narrative. No explanations, no notes, no comm
   reasoningEffort: 'off',
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -113,8 +113,8 @@ Return only the complete narrative with repetitions resolved. No explanations, n
   reasoningEffort: 'off',
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -141,8 +141,8 @@ export const DEFAULT_RECAST_SETTINGS: RecastSettings = {
   defaultConnectionId: '',
   defaultModelOverride: '',
   defaultReasoningEffort: 'off',
-  defaultTtftTimeoutSec: 20,
-  defaultPassTimeoutSec: 90,
+  defaultTtftTimeoutSec: 30,
+  defaultPassTimeoutSec: 60,
   maxTokens: 4096,
   protectTagsAndHtml: true
 };

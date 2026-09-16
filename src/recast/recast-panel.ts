@@ -407,9 +407,12 @@ export function renderRecastPanel(
 
   sBody.appendChild(row2);
 
-  // Row 3: Reasoning Effort & First-Word Timeout (TTFT)
+  // Row 3: Reasoning Effort, First-Word Timeout (TTFT), and Inactivity Watchdog
   const row3 = document.createElement('div');
-  row3.className = 'recast-row-2col';
+  row3.style.display = 'grid';
+  row3.style.gridTemplateColumns = '1.3fr 1fr 1fr';
+  row3.style.gap = '10px';
+  row3.style.marginBottom = '10px';
 
   // Default Reasoning Effort
   const reasonCol = document.createElement('div');
@@ -442,16 +445,16 @@ export function renderRecastPanel(
 
   // TTFT Timeout
   const ttftCol = document.createElement('div');
-  ttftCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">First Word Timeout (TTFT Seconds):</label>`;
+  ttftCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">First Word Timeout (TTFT s):</label>`;
   const ttftInput = document.createElement('input');
   ttftInput.type = 'number';
   ttftInput.className = 'lr-select';
   ttftInput.min = '5';
   ttftInput.max = '120';
-  ttftInput.value = String(recastSettings.defaultTtftTimeoutSec ?? 20);
+  ttftInput.value = String(recastSettings.defaultTtftTimeoutSec ?? 30);
   ttftInput.title = 'Abort pass if no response begins within this many seconds';
   ttftInput.onchange = () => {
-    const val = parseInt(ttftInput.value, 10) || 20;
+    const val = parseInt(ttftInput.value, 10) || 30;
     recastSettings.defaultTtftTimeoutSec = val;
     hostCtx?.sendToBackend({
       type: 'RECAST_UPDATE_SETTINGS',
@@ -460,6 +463,27 @@ export function renderRecastPanel(
   };
   ttftCol.appendChild(ttftInput);
   row3.appendChild(ttftCol);
+
+  // Stream Inactivity Watchdog Timeout
+  const inactCol = document.createElement('div');
+  inactCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Inactivity Timeout (s):</label>`;
+  const inactInput = document.createElement('input');
+  inactInput.type = 'number';
+  inactInput.className = 'lr-select';
+  inactInput.min = '10';
+  inactInput.max = '300';
+  inactInput.value = String(recastSettings.defaultPassTimeoutSec ?? 60);
+  inactInput.title = 'Timeout in seconds if no new tokens or reasoning are received. Resets continuously as tokens stream in.';
+  inactInput.onchange = () => {
+    const val = parseInt(inactInput.value, 10) || 60;
+    recastSettings.defaultPassTimeoutSec = val;
+    hostCtx?.sendToBackend({
+      type: 'RECAST_UPDATE_SETTINGS',
+      settings: { defaultPassTimeoutSec: val }
+    });
+  };
+  inactCol.appendChild(inactInput);
+  row3.appendChild(inactCol);
 
   sBody.appendChild(row3);
 
@@ -908,13 +932,14 @@ export function renderRecastPanel(
       timeoutRow.appendChild(pTtftCol);
 
       const pPassTimeCol = document.createElement('div');
-      pPassTimeCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Max Pass Duration (s):</label>`;
+      pPassTimeCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Inactivity Timeout (s):</label>`;
       const pPassTimeInput = document.createElement('input');
       pPassTimeInput.type = 'number';
       pPassTimeInput.className = 'lr-select';
       pPassTimeInput.min = '10';
       pPassTimeInput.max = '300';
       pPassTimeInput.value = String(pass.passTimeoutSec ?? 60);
+      pPassTimeInput.title = 'Timeout in seconds if no new tokens or reasoning are received. Resets continuously as tokens stream in.';
       pPassTimeInput.onchange = () => {
         pass.passTimeoutSec = parseInt(pPassTimeInput.value, 10) || 60;
         hostCtx?.sendToBackend({

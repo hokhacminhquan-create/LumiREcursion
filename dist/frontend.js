@@ -285,8 +285,8 @@ Return only the complete grounded narrative. No explanations, no notes, no comme
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: true,
   includeCharCard: true,
   includeSceneContext: true
@@ -321,8 +321,8 @@ Return only the complete narrative with character adjustments applied. No explan
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: true,
   includeSceneContext: true
@@ -350,8 +350,8 @@ Return only the complete, polished narrative. No explanations, no notes, no comm
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -371,8 +371,8 @@ Return only the complete narrative with repetitions resolved. No explanations, n
   reasoningEffort: "off",
   maxTokens: 4096,
   temperature: 0.3,
-  ttftTimeoutSec: 20,
-  passTimeoutSec: 90,
+  ttftTimeoutSec: 30,
+  passTimeoutSec: 60,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -397,8 +397,8 @@ var DEFAULT_RECAST_SETTINGS = {
   defaultConnectionId: "",
   defaultModelOverride: "",
   defaultReasoningEffort: "off",
-  defaultTtftTimeoutSec: 20,
-  defaultPassTimeoutSec: 90,
+  defaultTtftTimeoutSec: 30,
+  defaultPassTimeoutSec: 60,
   maxTokens: 4096,
   protectTagsAndHtml: true
 };
@@ -1577,7 +1577,10 @@ function renderRecastPanel(container, state) {
   row2.appendChild(modelCol);
   sBody.appendChild(row2);
   const row3 = document.createElement("div");
-  row3.className = "recast-row-2col";
+  row3.style.display = "grid";
+  row3.style.gridTemplateColumns = "1.3fr 1fr 1fr";
+  row3.style.gap = "10px";
+  row3.style.marginBottom = "10px";
   const reasonCol = document.createElement("div");
   reasonCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Reasoning / Thinking Effort:</label>`;
   const reasonSelect = document.createElement("select");
@@ -1606,16 +1609,16 @@ function renderRecastPanel(container, state) {
   reasonCol.appendChild(reasonSelect);
   row3.appendChild(reasonCol);
   const ttftCol = document.createElement("div");
-  ttftCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">First Word Timeout (TTFT Seconds):</label>`;
+  ttftCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">First Word Timeout (TTFT s):</label>`;
   const ttftInput = document.createElement("input");
   ttftInput.type = "number";
   ttftInput.className = "lr-select";
   ttftInput.min = "5";
   ttftInput.max = "120";
-  ttftInput.value = String(recastSettings.defaultTtftTimeoutSec ?? 20);
+  ttftInput.value = String(recastSettings.defaultTtftTimeoutSec ?? 30);
   ttftInput.title = "Abort pass if no response begins within this many seconds";
   ttftInput.onchange = () => {
-    const val = parseInt(ttftInput.value, 10) || 20;
+    const val = parseInt(ttftInput.value, 10) || 30;
     recastSettings.defaultTtftTimeoutSec = val;
     hostCtx?.sendToBackend({
       type: "RECAST_UPDATE_SETTINGS",
@@ -1624,6 +1627,25 @@ function renderRecastPanel(container, state) {
   };
   ttftCol.appendChild(ttftInput);
   row3.appendChild(ttftCol);
+  const inactCol = document.createElement("div");
+  inactCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Inactivity Timeout (s):</label>`;
+  const inactInput = document.createElement("input");
+  inactInput.type = "number";
+  inactInput.className = "lr-select";
+  inactInput.min = "10";
+  inactInput.max = "300";
+  inactInput.value = String(recastSettings.defaultPassTimeoutSec ?? 60);
+  inactInput.title = "Timeout in seconds if no new tokens or reasoning are received. Resets continuously as tokens stream in.";
+  inactInput.onchange = () => {
+    const val = parseInt(inactInput.value, 10) || 60;
+    recastSettings.defaultPassTimeoutSec = val;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { defaultPassTimeoutSec: val }
+    });
+  };
+  inactCol.appendChild(inactInput);
+  row3.appendChild(inactCol);
   sBody.appendChild(row3);
   const autoRunLabel = document.createElement("label");
   autoRunLabel.style.display = "flex";
@@ -1997,13 +2019,14 @@ Return only the rewritten text.`,
       pTtftCol.appendChild(pTtftInput);
       timeoutRow.appendChild(pTtftCol);
       const pPassTimeCol = document.createElement("div");
-      pPassTimeCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Max Pass Duration (s):</label>`;
+      pPassTimeCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Inactivity Timeout (s):</label>`;
       const pPassTimeInput = document.createElement("input");
       pPassTimeInput.type = "number";
       pPassTimeInput.className = "lr-select";
       pPassTimeInput.min = "10";
       pPassTimeInput.max = "300";
       pPassTimeInput.value = String(pass.passTimeoutSec ?? 60);
+      pPassTimeInput.title = "Timeout in seconds if no new tokens or reasoning are received. Resets continuously as tokens stream in.";
       pPassTimeInput.onchange = () => {
         pass.passTimeoutSec = parseInt(pPassTimeInput.value, 10) || 60;
         hostCtx?.sendToBackend({
