@@ -47,6 +47,7 @@ export interface RecastSettings {
   defaultTtftTimeoutSec?: number; // default: 20
   defaultPassTimeoutSec?: number; // default: 60
   maxTokens?: number;             // default: 1000
+  protectTagsAndHtml?: boolean;   // default: true (isolates GABI, CYOA, HTML cards, JSON blocks)
 }
 
 export interface RecastDiffStep {

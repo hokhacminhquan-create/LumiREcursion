@@ -471,4 +471,246 @@ ins.rc-ins {
   background: #34343c;
   color: #eee;
 }
+
+/* ── Model Picker Modal Styles ── */
+.rc-model-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.rc-model-modal {
+  background: #18181c;
+  border: 1px solid #383844;
+  border-radius: 8px;
+  width: 95%;
+  max-width: 620px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+  font-family: inherit;
+}
+
+.rc-model-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid #282832;
+  background: #1f1f26;
+}
+
+.rc-model-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rc-model-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e2e2e8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rc-model-subtitle {
+  font-size: 11px;
+  color: #999;
+}
+
+.rc-model-search-bar {
+  padding: 10px 18px 6px;
+  background: #18181c;
+}
+
+.rc-model-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: #22222a;
+  border: 1px solid #3c3c4a;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: #eee;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.rc-model-search-input:focus {
+  border-color: #a78bfa;
+}
+
+.rc-model-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 18px 10px;
+  border-bottom: 1px solid #282832;
+  background: #18181c;
+}
+
+.rc-model-tag-btn {
+  background: #23232b;
+  border: 1px solid #363644;
+  color: #aaa;
+  border-radius: 4px;
+  font-size: 10.5px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.rc-model-tag-btn:hover {
+  background: #2c2c36;
+  color: #eee;
+}
+
+.rc-model-tag-btn.active {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: #a78bfa;
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+.rc-model-clear-btn {
+  margin-left: auto;
+  border-color: #553333;
+  color: #ff9999;
+}
+
+.rc-model-clear-btn:hover {
+  background: rgba(255, 100, 100, 0.15);
+  border-color: #ff6666;
+  color: #ffaaaa;
+}
+
+.rc-model-list-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px;
+  min-height: 200px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rc-model-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 10px;
+  background: #1f1f26;
+  border: 1px solid #2e2e3a;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.rc-model-item:hover {
+  background: #282834;
+  border-color: #4c4c60;
+  transform: translateX(2px);
+}
+
+.rc-model-item.selected {
+  background: rgba(167, 139, 250, 0.15);
+  border-color: #a78bfa;
+}
+
+.rc-model-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.rc-model-item-id {
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 11.5px;
+  color: #d6d6e2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rc-model-item-label {
+  font-size: 10px;
+  color: #8a8a9a;
+}
+
+.rc-model-item-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.2);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.rc-model-empty {
+  text-align: center;
+  color: #777;
+  font-size: 12px;
+  padding: 30px 10px;
+}
+
+.rc-model-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 18px;
+  border-top: 1px solid #282832;
+  background: #1f1f26;
+}
+
+.rc-model-count-text {
+  font-size: 11px;
+  color: #888;
+}
+
+/* Row with Fetch Button */
+.recast-model-input-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.recast-btn-fetch {
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: #c4b5fd;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.recast-btn-fetch:hover {
+  background: rgba(167, 139, 250, 0.25);
+  border-color: #a78bfa;
+  color: #fff;
+}
+
+.recast-btn-fetch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 `;

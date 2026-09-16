@@ -405,7 +405,8 @@ var DEFAULT_RECAST_SETTINGS = {
   defaultReasoningEffort: "off",
   defaultTtftTimeoutSec: 20,
   defaultPassTimeoutSec: 60,
-  maxTokens: 1000
+  maxTokens: 1000,
+  protectTagsAndHtml: true
 };
 
 // src/recast/styles.ts
@@ -877,9 +878,501 @@ ins.rc-ins {
   background: #34343c;
   color: #eee;
 }
+
+/* ── Model Picker Modal Styles ── */
+.rc-model-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.rc-model-modal {
+  background: #18181c;
+  border: 1px solid #383844;
+  border-radius: 8px;
+  width: 95%;
+  max-width: 620px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+  font-family: inherit;
+}
+
+.rc-model-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid #282832;
+  background: #1f1f26;
+}
+
+.rc-model-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rc-model-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e2e2e8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rc-model-subtitle {
+  font-size: 11px;
+  color: #999;
+}
+
+.rc-model-search-bar {
+  padding: 10px 18px 6px;
+  background: #18181c;
+}
+
+.rc-model-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: #22222a;
+  border: 1px solid #3c3c4a;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: #eee;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.rc-model-search-input:focus {
+  border-color: #a78bfa;
+}
+
+.rc-model-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 18px 10px;
+  border-bottom: 1px solid #282832;
+  background: #18181c;
+}
+
+.rc-model-tag-btn {
+  background: #23232b;
+  border: 1px solid #363644;
+  color: #aaa;
+  border-radius: 4px;
+  font-size: 10.5px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.rc-model-tag-btn:hover {
+  background: #2c2c36;
+  color: #eee;
+}
+
+.rc-model-tag-btn.active {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: #a78bfa;
+  color: #c4b5fd;
+  font-weight: 600;
+}
+
+.rc-model-clear-btn {
+  margin-left: auto;
+  border-color: #553333;
+  color: #ff9999;
+}
+
+.rc-model-clear-btn:hover {
+  background: rgba(255, 100, 100, 0.15);
+  border-color: #ff6666;
+  color: #ffaaaa;
+}
+
+.rc-model-list-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px;
+  min-height: 200px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rc-model-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 10px;
+  background: #1f1f26;
+  border: 1px solid #2e2e3a;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.rc-model-item:hover {
+  background: #282834;
+  border-color: #4c4c60;
+  transform: translateX(2px);
+}
+
+.rc-model-item.selected {
+  background: rgba(167, 139, 250, 0.15);
+  border-color: #a78bfa;
+}
+
+.rc-model-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.rc-model-item-id {
+  font-family: 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 11.5px;
+  color: #d6d6e2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rc-model-item-label {
+  font-size: 10px;
+  color: #8a8a9a;
+}
+
+.rc-model-item-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.2);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.rc-model-empty {
+  text-align: center;
+  color: #777;
+  font-size: 12px;
+  padding: 30px 10px;
+}
+
+.rc-model-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 18px;
+  border-top: 1px solid #282832;
+  background: #1f1f26;
+}
+
+.rc-model-count-text {
+  font-size: 11px;
+  color: #888;
+}
+
+/* Row with Fetch Button */
+.recast-model-input-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.recast-btn-fetch {
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: #c4b5fd;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.recast-btn-fetch:hover {
+  background: rgba(167, 139, 250, 0.25);
+  border-color: #a78bfa;
+  color: #fff;
+}
+
+.recast-btn-fetch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 `;
 
+// src/recast/model-picker-modal.ts
+var activeModelBackdropEl = null;
+function closeModelPickerModal() {
+  if (activeModelBackdropEl && activeModelBackdropEl.parentElement) {
+    activeModelBackdropEl.remove();
+  }
+  activeModelBackdropEl = null;
+  const host = document.getElementById("recursion-modal-host");
+  if (host) {
+    host.classList.remove("active");
+  }
+}
+function showModelPickerModal(options) {
+  closeModelPickerModal();
+  const { title, connectionName, models, labels = {}, currentValue = "", onSelect } = options;
+  let host = document.getElementById("recursion-modal-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "recursion-modal-host";
+    document.body.appendChild(host);
+  }
+  host.classList.add("active");
+  const backdrop = document.createElement("div");
+  backdrop.id = "recast_model_backdrop";
+  backdrop.className = "rc-model-backdrop";
+  activeModelBackdropEl = backdrop;
+  const modal = document.createElement("div");
+  modal.id = "recast_model_modal";
+  modal.className = "rc-model-modal";
+  modal.onclick = (e) => e.stopPropagation();
+  const header = document.createElement("div");
+  header.className = "rc-model-header";
+  const titleGroup = document.createElement("div");
+  titleGroup.className = "rc-model-title-group";
+  titleGroup.innerHTML = `
+    <div class="rc-model-title">\uD83C\uDF10 ${title || "Select Model Override"}</div>
+    <div class="rc-model-subtitle">Connection: <strong>${escapeHtml(connectionName)}</strong> · ${models.length} models fetched</div>
+  `;
+  header.appendChild(titleGroup);
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "rc-diff-close-btn";
+  closeBtn.innerHTML = "✕";
+  closeBtn.title = "Close";
+  closeBtn.onclick = closeModelPickerModal;
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+  const searchBar = document.createElement("div");
+  searchBar.className = "rc-model-search-bar";
+  const searchInput = document.createElement("input");
+  searchInput.type = "text";
+  searchInput.className = "rc-model-search-input";
+  searchInput.placeholder = "\uD83D\uDD0E Filter models (e.g. flash, deepseek, gemini, claude, 4o)...";
+  searchBar.appendChild(searchInput);
+  modal.appendChild(searchBar);
+  const tagsRow = document.createElement("div");
+  tagsRow.className = "rc-model-tags-row";
+  const families = ["All", "Gemini", "DeepSeek", "Claude", "GPT", "Qwen", "Llama", "Grok", "Mistral"];
+  let activeTag = "All";
+  const tagButtons = [];
+  families.forEach((fam) => {
+    const btn = document.createElement("button");
+    btn.className = `rc-model-tag-btn ${fam === "All" ? "active" : ""}`;
+    btn.textContent = fam;
+    btn.onclick = () => {
+      activeTag = fam;
+      tagButtons.forEach((b) => b.classList.toggle("active", b === btn));
+      renderList();
+    };
+    tagButtons.push(btn);
+    tagsRow.appendChild(btn);
+  });
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "rc-model-tag-btn rc-model-clear-btn";
+  clearBtn.innerHTML = "∅ Reset (Inherit)";
+  clearBtn.title = "Clear model override and inherit connection default";
+  clearBtn.onclick = () => {
+    onSelect("");
+    closeModelPickerModal();
+  };
+  tagsRow.appendChild(clearBtn);
+  modal.appendChild(tagsRow);
+  const listContainer = document.createElement("div");
+  listContainer.className = "rc-model-list-container";
+  modal.appendChild(listContainer);
+  const footer = document.createElement("div");
+  footer.className = "rc-model-footer";
+  const countSpan = document.createElement("span");
+  countSpan.className = "rc-model-count-text";
+  footer.appendChild(countSpan);
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "rc-diff-btn rc-diff-reject-btn";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.onclick = closeModelPickerModal;
+  footer.appendChild(cancelBtn);
+  modal.appendChild(footer);
+  const renderList = () => {
+    const query = searchInput.value.trim().toLowerCase();
+    listContainer.innerHTML = "";
+    const filtered = models.filter((m) => {
+      const label = (labels[m] || "").toLowerCase();
+      const lowerM = m.toLowerCase();
+      if (activeTag !== "All") {
+        const tagLower = activeTag.toLowerCase();
+        if (!lowerM.includes(tagLower) && !label.includes(tagLower)) {
+          return false;
+        }
+      }
+      if (!query)
+        return true;
+      return lowerM.includes(query) || label.includes(query);
+    });
+    countSpan.textContent = `Showing ${filtered.length} of ${models.length} models`;
+    if (filtered.length === 0) {
+      const emptyDiv = document.createElement("div");
+      emptyDiv.className = "rc-model-empty";
+      emptyDiv.textContent = "No matching models found.";
+      listContainer.appendChild(emptyDiv);
+      return;
+    }
+    filtered.forEach((modelId) => {
+      const item = document.createElement("div");
+      item.className = `rc-model-item ${modelId === currentValue ? "selected" : ""}`;
+      const label = labels[modelId];
+      item.innerHTML = `
+        <div class="rc-model-item-main">
+          <div class="rc-model-item-id">${escapeHtml(modelId)}</div>
+          ${label ? `<div class="rc-model-item-label">${escapeHtml(label)}</div>` : ""}
+        </div>
+        ${modelId === currentValue ? '<span class="rc-model-item-badge">Active</span>' : ""}
+      `;
+      item.onclick = () => {
+        onSelect(modelId);
+        closeModelPickerModal();
+      };
+      listContainer.appendChild(item);
+    });
+  };
+  searchInput.oninput = () => renderList();
+  renderList();
+  backdrop.appendChild(modal);
+  backdrop.onclick = closeModelPickerModal;
+  document.body.appendChild(backdrop);
+  setTimeout(() => {
+    searchInput.focus();
+  }, 50);
+}
+function escapeHtml(str) {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
 // src/recast/recast-panel.ts
+var connectionModelsCache = new Map;
+async function fetchConnectionModels(connectionId) {
+  if (connectionModelsCache.has(connectionId)) {
+    return connectionModelsCache.get(connectionId);
+  }
+  const res = await fetch(`/api/v1/connections/${encodeURIComponent(connectionId)}/models`, {
+    credentials: "include"
+  });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  }
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  const models = Array.isArray(data.models) ? data.models : [];
+  const labels = data.model_labels && typeof data.model_labels === "object" ? data.model_labels : {};
+  const result = { models, labels };
+  connectionModelsCache.set(connectionId, result);
+  return result;
+}
+function createModelOverrideInputGroup(opts) {
+  const container = document.createElement("div");
+  container.className = "recast-model-input-group";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "lr-select";
+  input.style.flex = "1";
+  input.placeholder = opts.placeholder;
+  input.value = opts.value || "";
+  input.setAttribute("list", opts.datalistId);
+  let datalist = document.getElementById(opts.datalistId);
+  if (!datalist) {
+    datalist = document.createElement("datalist");
+    datalist.id = opts.datalistId;
+    document.body.appendChild(datalist);
+  }
+  const populateDatalist = (models, labels) => {
+    datalist.innerHTML = "";
+    models.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      if (labels[m]) {
+        opt.label = labels[m];
+      }
+      datalist.appendChild(opt);
+    });
+  };
+  const initialConnId = opts.getConnectionId();
+  if (initialConnId && connectionModelsCache.has(initialConnId)) {
+    const cached = connectionModelsCache.get(initialConnId);
+    populateDatalist(cached.models, cached.labels);
+  }
+  input.onchange = () => {
+    opts.onSave(input.value.trim());
+  };
+  const fetchBtn = document.createElement("button");
+  fetchBtn.type = "button";
+  fetchBtn.className = "recast-btn-fetch";
+  fetchBtn.innerHTML = `<span>\uD83D\uDD0D Fetch Models</span>`;
+  fetchBtn.title = "Fetch available models from the provider connection link and browse/search";
+  fetchBtn.onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const connId = opts.getConnectionId();
+    if (!connId) {
+      opts.hostCtx?.toast?.error?.("Please select or configure a Connection Profile first.");
+      return;
+    }
+    const connName = opts.getConnectionName() || "Connection";
+    const originalHtml = fetchBtn.innerHTML;
+    fetchBtn.disabled = true;
+    fetchBtn.innerHTML = `<span>⏳ Fetching...</span>`;
+    try {
+      const { models, labels } = await fetchConnectionModels(connId);
+      populateDatalist(models, labels);
+      showModelPickerModal({
+        title: "Select Model Override",
+        connectionName: connName,
+        models,
+        labels,
+        currentValue: input.value.trim(),
+        onSelect: (selectedModelId) => {
+          input.value = selectedModelId;
+          opts.onSave(selectedModelId);
+          opts.hostCtx?.toast?.info?.(selectedModelId ? `✨ Model override set to: ${selectedModelId}` : "✨ Model override cleared (inheriting connection default)");
+        }
+      });
+    } catch (err) {
+      console.error("[Lumi:REcursion:Recast] Failed to fetch models:", err);
+      opts.hostCtx?.toast?.error?.(`Failed to fetch models from provider: ${err?.message || err}`);
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.innerHTML = originalHtml;
+    }
+  };
+  container.appendChild(input);
+  container.appendChild(fetchBtn);
+  return container;
+}
 var expandedPasses = new Set;
 function renderRecastPanel(container, state) {
   const { recastSettings, recastProgress, availableConnections, hostCtx, onRefresh } = state;
@@ -1067,20 +1560,26 @@ function renderRecastPanel(container, state) {
   row2.appendChild(connCol);
   const modelCol = document.createElement("div");
   modelCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Default Model Override:</label>`;
-  const modelInput = document.createElement("input");
-  modelInput.type = "text";
-  modelInput.className = "lr-select";
-  modelInput.placeholder = "(Inherit from Connection Profile)";
-  modelInput.value = recastSettings.defaultModelOverride || "";
-  modelInput.title = "Specify a fast model ID (e.g. google/gemini-2.0-flash, deepseek/deepseek-chat)";
-  modelInput.onchange = () => {
-    recastSettings.defaultModelOverride = modelInput.value.trim();
-    hostCtx?.sendToBackend({
-      type: "RECAST_UPDATE_SETTINGS",
-      settings: { defaultModelOverride: modelInput.value.trim() }
-    });
-  };
-  modelCol.appendChild(modelInput);
+  const modelGroup = createModelOverrideInputGroup({
+    value: recastSettings.defaultModelOverride || "",
+    placeholder: "(Inherit from Connection Profile)",
+    datalistId: "lr-datalist-global-models",
+    getConnectionId: () => recastSettings.defaultConnectionId || availableConnections.find((c) => c.is_default)?.id || availableConnections[0]?.id || "",
+    getConnectionName: () => {
+      const id = recastSettings.defaultConnectionId;
+      const found = availableConnections.find((c) => c.id === id) || availableConnections.find((c) => c.is_default) || availableConnections[0];
+      return found?.name || "Default Connection";
+    },
+    onSave: (val) => {
+      recastSettings.defaultModelOverride = val;
+      hostCtx?.sendToBackend({
+        type: "RECAST_UPDATE_SETTINGS",
+        settings: { defaultModelOverride: val }
+      });
+    },
+    hostCtx
+  });
+  modelCol.appendChild(modelGroup);
   row2.appendChild(modelCol);
   sBody.appendChild(row2);
   const row3 = document.createElement("div");
@@ -1153,6 +1652,28 @@ function renderRecastPanel(container, state) {
   autoRunLabel.appendChild(autoRunCheckbox);
   autoRunLabel.appendChild(document.createTextNode("Auto-run Recast pipeline when generation ends"));
   sBody.appendChild(autoRunLabel);
+  const protectLabel = document.createElement("label");
+  protectLabel.style.display = "flex";
+  protectLabel.style.alignItems = "center";
+  protectLabel.style.gap = "6px";
+  protectLabel.style.fontSize = "11.5px";
+  protectLabel.style.color = "#ccc";
+  protectLabel.style.cursor = "pointer";
+  protectLabel.style.marginTop = "6px";
+  const protectCheckbox = document.createElement("input");
+  protectCheckbox.type = "checkbox";
+  protectCheckbox.checked = recastSettings.protectTagsAndHtml !== false;
+  protectCheckbox.onchange = () => {
+    recastSettings.protectTagsAndHtml = protectCheckbox.checked;
+    hostCtx?.sendToBackend({
+      type: "RECAST_UPDATE_SETTINGS",
+      settings: { protectTagsAndHtml: protectCheckbox.checked }
+    });
+    hostCtx?.toast?.info?.(protectCheckbox.checked ? "\uD83D\uDEE1️ Protected tags, CYOA, GABI metadata & JSON blocks enabled" : "⚠️ Block protection disabled (raw message will be sent to LLM)");
+  };
+  protectLabel.appendChild(protectCheckbox);
+  protectLabel.appendChild(document.createTextNode("\uD83D\uDEE1️ Protect HTML tags, CYOA widgets, GABI metadata & JSON state blocks"));
+  sBody.appendChild(protectLabel);
   const presetBar = document.createElement("div");
   presetBar.className = "lr-deck-bar";
   presetBar.style.marginTop = "8px";
@@ -1413,19 +1934,26 @@ Return only the rewritten text.`,
       modelReasonRow.className = "recast-row-2col";
       const pModelCol = document.createElement("div");
       pModelCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Model Override:</label>`;
-      const pModelInput = document.createElement("input");
-      pModelInput.type = "text";
-      pModelInput.className = "lr-select";
-      pModelInput.placeholder = "(Inherit from Connection)";
-      pModelInput.value = pass.modelOverride || "";
-      pModelInput.onchange = () => {
-        pass.modelOverride = pModelInput.value.trim();
-        hostCtx?.sendToBackend({
-          type: "RECAST_UPDATE_PRESET",
-          preset: activePreset
-        });
-      };
-      pModelCol.appendChild(pModelInput);
+      const pModelGroup = createModelOverrideInputGroup({
+        value: pass.modelOverride || "",
+        placeholder: "(Inherit from Connection)",
+        datalistId: `lr-datalist-pass-${pass.id}`,
+        getConnectionId: () => pass.connection || recastSettings.defaultConnectionId || availableConnections.find((c) => c.is_default)?.id || availableConnections[0]?.id || "",
+        getConnectionName: () => {
+          const id = pass.connection || recastSettings.defaultConnectionId;
+          const found = availableConnections.find((c) => c.id === id) || availableConnections.find((c) => c.is_default) || availableConnections[0];
+          return found?.name || "Inherited Connection";
+        },
+        onSave: (val) => {
+          pass.modelOverride = val;
+          hostCtx?.sendToBackend({
+            type: "RECAST_UPDATE_PRESET",
+            preset: activePreset
+          });
+        },
+        hostCtx
+      });
+      pModelCol.appendChild(pModelGroup);
       modelReasonRow.appendChild(pModelCol);
       const pReasonCol = document.createElement("div");
       pReasonCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Reasoning Effort:</label>`;
@@ -1589,7 +2117,7 @@ Return only the rewritten text.`,
 }
 
 // src/recast/diff.ts
-function escapeHtml(str) {
+function escapeHtml2(str) {
   if (str === null || str === undefined)
     return "";
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1679,7 +2207,7 @@ function computeWordDiff(oldText, newText) {
   const a = tokenize(oldText);
   const b = tokenize(newText);
   if (a.length > MAX_DIFF_TOKENS || b.length > MAX_DIFF_TOKENS) {
-    return { oldHtml: escapeHtml(oldText), newHtml: escapeHtml(newText) };
+    return { oldHtml: escapeHtml2(oldText), newHtml: escapeHtml2(newText) };
   }
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) {
@@ -1710,7 +2238,7 @@ function computeWordDiff(oldText, newText) {
   for (const op of fullOps) {
     if (op.v === undefined || op.v === null)
       continue;
-    const v = escapeHtml(op.v);
+    const v = escapeHtml2(op.v);
     if (op.type === "equal") {
       oldHtml += v;
       newHtml += v;

@@ -5,6 +5,7 @@
  */
 
 import type { RecastPass, RecastPreset, RecastSettings, RecastDiffData, RecastProgress } from './types';
+import { extractAndProtectBlocks, restoreProtectedBlocks, type ProtectedContent } from './block-protection';
 
 function cleanModelOutput(text: string): string {
   if (!text) return '';
@@ -46,12 +47,17 @@ export async function runSinglePass(
     wordCount: number;
     elapsedSec: number;
     streamPreview: string;
-  }) => void
+  }) => void,
+  protectedData?: ProtectedContent
 ): Promise<string> {
   if (!pass.enabled) return textToTransform;
 
   const tStart = Date.now();
-  let systemPrompt = pass.prompt.trim();
+  let systemPrompt = pass.prompt || 'You are an expert prose editor. Rewrite the text to improve flow, voice, and pacing.\nReturn only the rewritten text.';
+
+  if (protectedData && protectedData.placeholders.size > 0) {
+    systemPrompt += `\n\n[CRITICAL PRESERVATION NOTICE: The text contains preserved block tokens formatted as ⟦LR_PROTECT_N⟧ representing intact UI cards and embedded structures. You MUST keep all ⟦LR_PROTECT_N⟧ tokens verbatim in their original positions without deleting, altering, or translating them.]`;
+  }
 
   // 1. Retrieve Character Details if requested
   let charCardXml = '';
@@ -360,7 +366,27 @@ export async function runRecastPipeline(
   }
 
   const tStart = Date.now();
-  let currentText = rawText;
+
+  // Tag, HTML, Comment, and Metadata Block Protection
+  const protectEnabled = settings.protectTagsAndHtml !== false;
+  const protectedData = protectEnabled
+    ? extractAndProtectBlocks(rawText)
+    : {
+        prefix: '',
+        suffix: '',
+        maskedBody: rawText,
+        originalBody: rawText,
+        placeholders: new Map<string, string>(),
+        totalProtectedCount: 0
+      };
+
+  if (protectEnabled && protectedData.totalProtectedCount > 0) {
+    console.log(
+      `[Lumi:REcursion:Recast] Protected ${protectedData.totalProtectedCount} non-prose blocks (prefix: ${protectedData.prefix.length}c, suffix: ${protectedData.suffix.length}c, inline: ${protectedData.placeholders.size})`
+    );
+  }
+
+  let currentText = protectedData.maskedBody;
   const snapshots: string[] = [rawText];
   const passNames: string[] = [];
   const errors: Array<{ passName: string; error: string }> = [];
@@ -415,17 +441,18 @@ export async function runRecastPipeline(
             wordCount: streamInfo.wordCount,
             streamPreview: streamInfo.streamPreview
           });
-        }
+        },
+        protectedData
       );
 
       currentText = passOutput;
-      snapshots.push(currentText);
+      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     } catch (err: any) {
       console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
       const errMsg = err?.message || String(err);
       errors.push({ passName: pass.name, error: errMsg });
       sp?.toast?.error?.(`Pass "${pass.name}" failed: ${errMsg}`);
-      snapshots.push(currentText);
+      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     }
   }
 
@@ -436,6 +463,7 @@ export async function runRecastPipeline(
   }
 
   const totalLatencyMs = Date.now() - tStart;
+  const finalTransformedText = restoreProtectedBlocks(currentText, protectedData);
 
   onProgress?.({
     active: false,
@@ -451,7 +479,7 @@ export async function runRecastPipeline(
     chatId,
     messageId,
     originalText: rawText,
-    transformedText: currentText,
+    transformedText: finalTransformedText,
     snapshots,
     passNames,
     totalLatencyMs

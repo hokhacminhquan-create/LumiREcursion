@@ -149,5 +149,6 @@ export const DEFAULT_RECAST_SETTINGS: RecastSettings = {
   defaultReasoningEffort: 'off',
   defaultTtftTimeoutSec: 20,
   defaultPassTimeoutSec: 60,
-  maxTokens: 1000
+  maxTokens: 1000,
+  protectTagsAndHtml: true
 };

@@ -5,6 +5,140 @@
  */
 
 import type { RecastSettings, RecastProgress, RecastPass, RecastPreset, RecastReasoningEffort } from './types';
+import { showModelPickerModal } from './model-picker-modal';
+
+// In-memory cache for models fetched per connection
+const connectionModelsCache = new Map<string, { models: string[]; labels: Record<string, string> }>();
+
+async function fetchConnectionModels(
+  connectionId: string
+): Promise<{ models: string[]; labels: Record<string, string> }> {
+  if (connectionModelsCache.has(connectionId)) {
+    return connectionModelsCache.get(connectionId)!;
+  }
+
+  const res = await fetch(`/api/v1/connections/${encodeURIComponent(connectionId)}/models`, {
+    credentials: 'include'
+  });
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error);
+  }
+
+  const models: string[] = Array.isArray(data.models) ? data.models : [];
+  const labels: Record<string, string> = (data.model_labels && typeof data.model_labels === 'object') ? data.model_labels : {};
+
+  const result = { models, labels };
+  connectionModelsCache.set(connectionId, result);
+  return result;
+}
+
+function createModelOverrideInputGroup(opts: {
+  value: string;
+  placeholder: string;
+  datalistId: string;
+  getConnectionId: () => string;
+  getConnectionName: () => string;
+  onSave: (val: string) => void;
+  hostCtx: any;
+}): HTMLElement {
+  const container = document.createElement('div');
+  container.className = 'recast-model-input-group';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'lr-select';
+  input.style.flex = '1';
+  input.placeholder = opts.placeholder;
+  input.value = opts.value || '';
+  input.setAttribute('list', opts.datalistId);
+
+  // Setup datalist for native autocomplete
+  let datalist = document.getElementById(opts.datalistId) as HTMLDataListElement;
+  if (!datalist) {
+    datalist = document.createElement('datalist');
+    datalist.id = opts.datalistId;
+    document.body.appendChild(datalist);
+  }
+
+  const populateDatalist = (models: string[], labels: Record<string, string>) => {
+    datalist.innerHTML = '';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      if (labels[m]) {
+        opt.label = labels[m];
+      }
+      datalist.appendChild(opt);
+    });
+  };
+
+  const initialConnId = opts.getConnectionId();
+  if (initialConnId && connectionModelsCache.has(initialConnId)) {
+    const cached = connectionModelsCache.get(initialConnId)!;
+    populateDatalist(cached.models, cached.labels);
+  }
+
+  input.onchange = () => {
+    opts.onSave(input.value.trim());
+  };
+
+  const fetchBtn = document.createElement('button');
+  fetchBtn.type = 'button';
+  fetchBtn.className = 'recast-btn-fetch';
+  fetchBtn.innerHTML = `<span>🔍 Fetch Models</span>`;
+  fetchBtn.title = 'Fetch available models from the provider connection link and browse/search';
+
+  fetchBtn.onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const connId = opts.getConnectionId();
+    if (!connId) {
+      opts.hostCtx?.toast?.error?.('Please select or configure a Connection Profile first.');
+      return;
+    }
+
+    const connName = opts.getConnectionName() || 'Connection';
+
+    const originalHtml = fetchBtn.innerHTML;
+    fetchBtn.disabled = true;
+    fetchBtn.innerHTML = `<span>⏳ Fetching...</span>`;
+
+    try {
+      const { models, labels } = await fetchConnectionModels(connId);
+      populateDatalist(models, labels);
+
+      showModelPickerModal({
+        title: 'Select Model Override',
+        connectionName: connName,
+        models,
+        labels,
+        currentValue: input.value.trim(),
+        onSelect: (selectedModelId) => {
+          input.value = selectedModelId;
+          opts.onSave(selectedModelId);
+          opts.hostCtx?.toast?.info?.(selectedModelId ? `✨ Model override set to: ${selectedModelId}` : '✨ Model override cleared (inheriting connection default)');
+        }
+      });
+    } catch (err: any) {
+      console.error('[Lumi:REcursion:Recast] Failed to fetch models:', err);
+      opts.hostCtx?.toast?.error?.(`Failed to fetch models from provider: ${err?.message || err}`);
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.innerHTML = originalHtml;
+    }
+  };
+
+  container.appendChild(input);
+  container.appendChild(fetchBtn);
+  return container;
+}
 
 // Track which passes are expanded
 const expandedPasses = new Set<string>();
@@ -242,20 +376,33 @@ export function renderRecastPanel(
   // Default Model Override
   const modelCol = document.createElement('div');
   modelCol.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Default Model Override:</label>`;
-  const modelInput = document.createElement('input');
-  modelInput.type = 'text';
-  modelInput.className = 'lr-select';
-  modelInput.placeholder = '(Inherit from Connection Profile)';
-  modelInput.value = recastSettings.defaultModelOverride || '';
-  modelInput.title = 'Specify a fast model ID (e.g. google/gemini-2.0-flash, deepseek/deepseek-chat)';
-  modelInput.onchange = () => {
-    recastSettings.defaultModelOverride = modelInput.value.trim();
-    hostCtx?.sendToBackend({
-      type: 'RECAST_UPDATE_SETTINGS',
-      settings: { defaultModelOverride: modelInput.value.trim() }
-    });
-  };
-  modelCol.appendChild(modelInput);
+  const modelGroup = createModelOverrideInputGroup({
+    value: recastSettings.defaultModelOverride || '',
+    placeholder: '(Inherit from Connection Profile)',
+    datalistId: 'lr-datalist-global-models',
+    getConnectionId: () =>
+      recastSettings.defaultConnectionId ||
+      availableConnections.find((c) => c.is_default)?.id ||
+      availableConnections[0]?.id ||
+      '',
+    getConnectionName: () => {
+      const id = recastSettings.defaultConnectionId;
+      const found =
+        availableConnections.find((c) => c.id === id) ||
+        availableConnections.find((c) => c.is_default) ||
+        availableConnections[0];
+      return found?.name || 'Default Connection';
+    },
+    onSave: (val) => {
+      recastSettings.defaultModelOverride = val;
+      hostCtx?.sendToBackend({
+        type: 'RECAST_UPDATE_SETTINGS',
+        settings: { defaultModelOverride: val }
+      });
+    },
+    hostCtx
+  });
+  modelCol.appendChild(modelGroup);
   row2.appendChild(modelCol);
 
   sBody.appendChild(row2);
@@ -340,6 +487,36 @@ export function renderRecastPanel(
     document.createTextNode('Auto-run Recast pipeline when generation ends')
   );
   sBody.appendChild(autoRunLabel);
+
+  // 🛡️ Block Protection Toggle
+  const protectLabel = document.createElement('label');
+  protectLabel.style.display = 'flex';
+  protectLabel.style.alignItems = 'center';
+  protectLabel.style.gap = '6px';
+  protectLabel.style.fontSize = '11.5px';
+  protectLabel.style.color = '#ccc';
+  protectLabel.style.cursor = 'pointer';
+  protectLabel.style.marginTop = '6px';
+  const protectCheckbox = document.createElement('input');
+  protectCheckbox.type = 'checkbox';
+  protectCheckbox.checked = recastSettings.protectTagsAndHtml !== false;
+  protectCheckbox.onchange = () => {
+    recastSettings.protectTagsAndHtml = protectCheckbox.checked;
+    hostCtx?.sendToBackend({
+      type: 'RECAST_UPDATE_SETTINGS',
+      settings: { protectTagsAndHtml: protectCheckbox.checked }
+    });
+    hostCtx?.toast?.info?.(
+      protectCheckbox.checked
+        ? '🛡️ Protected tags, CYOA, GABI metadata & JSON blocks enabled'
+        : '⚠️ Block protection disabled (raw message will be sent to LLM)'
+    );
+  };
+  protectLabel.appendChild(protectCheckbox);
+  protectLabel.appendChild(
+    document.createTextNode('🛡️ Protect HTML tags, CYOA widgets, GABI metadata & JSON state blocks')
+  );
+  sBody.appendChild(protectLabel);
 
   // Preset Selector Bar
   const presetBar = document.createElement('div');
@@ -647,19 +824,34 @@ export function renderRecastPanel(
       // Model Override
       const pModelCol = document.createElement('div');
       pModelCol.innerHTML = `<label style="display:block;font-size:10.5px;color:#aaa;margin-bottom:3px;">Model Override:</label>`;
-      const pModelInput = document.createElement('input');
-      pModelInput.type = 'text';
-      pModelInput.className = 'lr-select';
-      pModelInput.placeholder = '(Inherit from Connection)';
-      pModelInput.value = pass.modelOverride || '';
-      pModelInput.onchange = () => {
-        pass.modelOverride = pModelInput.value.trim();
-        hostCtx?.sendToBackend({
-          type: 'RECAST_UPDATE_PRESET',
-          preset: activePreset
-        });
-      };
-      pModelCol.appendChild(pModelInput);
+      const pModelGroup = createModelOverrideInputGroup({
+        value: pass.modelOverride || '',
+        placeholder: '(Inherit from Connection)',
+        datalistId: `lr-datalist-pass-${pass.id}`,
+        getConnectionId: () =>
+          pass.connection ||
+          recastSettings.defaultConnectionId ||
+          availableConnections.find((c) => c.is_default)?.id ||
+          availableConnections[0]?.id ||
+          '',
+        getConnectionName: () => {
+          const id = pass.connection || recastSettings.defaultConnectionId;
+          const found =
+            availableConnections.find((c) => c.id === id) ||
+            availableConnections.find((c) => c.is_default) ||
+            availableConnections[0];
+          return found?.name || 'Inherited Connection';
+        },
+        onSave: (val) => {
+          pass.modelOverride = val;
+          hostCtx?.sendToBackend({
+            type: 'RECAST_UPDATE_PRESET',
+            preset: activePreset
+          });
+        },
+        hostCtx
+      });
+      pModelCol.appendChild(pModelGroup);
       modelReasonRow.appendChild(pModelCol);
 
       // Reasoning Effort

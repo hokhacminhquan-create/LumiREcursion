@@ -464,7 +464,8 @@ var DEFAULT_RECAST_SETTINGS = {
   defaultReasoningEffort: "off",
   defaultTtftTimeoutSec: 20,
   defaultPassTimeoutSec: 60,
-  maxTokens: 1000
+  maxTokens: 1000,
+  protectTagsAndHtml: true
 };
 
 // src/storage.ts
@@ -1229,6 +1230,261 @@ async function importCharacterPayload(spindle2, characterId, importedData, userI
   return { success: true, cardCount: cleanCards.length };
 }
 
+// src/recast/block-protection.ts
+var PLACEHOLDER_PREFIX = "\u27E6LR_PROTECT_";
+var PLACEHOLDER_SUFFIX = "\u27E7";
+function findMatchingClosingTag(text, startIndex, tagName) {
+  const openTagPattern = new RegExp(`^<${tagName}(?:[\\s>])`, "i");
+  const closeTagPattern = new RegExp(`^<\\/${tagName}(?:[\\s>])`, "i");
+  let depth = 0;
+  let i = startIndex;
+  while (i < text.length) {
+    if (text[i] === "<") {
+      const slice = text.slice(i);
+      if (openTagPattern.test(slice)) {
+        depth++;
+        const tagEnd = text.indexOf(">", i);
+        if (tagEnd === -1)
+          return -1;
+        i = tagEnd + 1;
+        continue;
+      } else if (closeTagPattern.test(slice)) {
+        depth--;
+        const tagEnd = text.indexOf(">", i);
+        if (tagEnd === -1)
+          return -1;
+        if (depth === 0) {
+          return tagEnd + 1;
+        }
+        i = tagEnd + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+  return -1;
+}
+function tryParseJson(str) {
+  try {
+    const trimmed = str.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}"))
+      return false;
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function extractAndProtectBlocks(text, options = {}) {
+  const {
+    protectHeaderComments = true,
+    protectTrailingBlocks = true,
+    protectInlineHtml = true
+  } = options;
+  let remaining = text;
+  let prefix = "";
+  let suffix = "";
+  const placeholders = new Map;
+  let blockCounter = 0;
+  if (protectHeaderComments) {
+    let advanced = true;
+    while (advanced) {
+      advanced = false;
+      const wsMatch = remaining.match(/^\s+/);
+      if (wsMatch) {
+        prefix += wsMatch[0];
+        remaining = remaining.slice(wsMatch[0].length);
+      }
+      const pairedStartMatch = remaining.match(/^<!--\s*([A-Za-z0-9_-]+)_START\s*-->/i);
+      if (pairedStartMatch) {
+        const tagName = pairedStartMatch[1];
+        const endTagPattern = new RegExp(`<!--\\s*${tagName}_END\\s*-->`, "i");
+        const endMatch = remaining.match(endTagPattern);
+        if (endMatch && endMatch.index !== undefined) {
+          const blockEndIndex = endMatch.index + endMatch[0].length;
+          prefix += remaining.slice(0, blockEndIndex);
+          remaining = remaining.slice(blockEndIndex);
+          advanced = true;
+          continue;
+        }
+      }
+      if (remaining.startsWith("<!--")) {
+        const commentEnd = remaining.indexOf("-->");
+        if (commentEnd !== -1) {
+          const commentBlock = remaining.slice(0, commentEnd + 3);
+          prefix += commentBlock;
+          remaining = remaining.slice(commentEnd + 3);
+          advanced = true;
+          continue;
+        }
+      }
+      const hrMatch = remaining.match(/^(\s*(?:---+|\*\*\*+|___+)\s*\n+)/);
+      if (hrMatch && prefix.length > 0) {
+        prefix += hrMatch[0];
+        remaining = remaining.slice(hrMatch[0].length);
+        advanced = true;
+        continue;
+      }
+    }
+  }
+  if (protectTrailingBlocks) {
+    let advancedSuffix = true;
+    while (advancedSuffix) {
+      advancedSuffix = false;
+      const lastCloseBrace = remaining.lastIndexOf("}");
+      if (lastCloseBrace !== -1) {
+        const afterClose = remaining.slice(lastCloseBrace + 1);
+        const isTrailingValid = /^\s*(?:(?:---+|\*\*\*+|___+)\s*)?$/.test(afterClose);
+        if (isTrailingValid) {
+          let openBraceIndex = -1;
+          let depth = 0;
+          for (let i = lastCloseBrace;i >= 0; i--) {
+            if (remaining[i] === "}")
+              depth++;
+            else if (remaining[i] === "{") {
+              depth--;
+              if (depth === 0) {
+                openBraceIndex = i;
+                break;
+              }
+            }
+          }
+          if (openBraceIndex !== -1) {
+            const jsonCandidate = remaining.slice(openBraceIndex, lastCloseBrace + 1);
+            if (tryParseJson(jsonCandidate)) {
+              const beforeOpen = remaining.slice(0, openBraceIndex);
+              const sepMatch = beforeOpen.match(/(?:\n\s*(?:---+|\*\*\*+|___+|```(?:json)?)\s*\n\s*)$/);
+              const cutIndex = sepMatch ? beforeOpen.length - sepMatch[0].length : openBraceIndex;
+              const trailingJsonSegment = remaining.slice(cutIndex);
+              suffix = trailingJsonSegment + suffix;
+              remaining = remaining.slice(0, cutIndex);
+              advancedSuffix = true;
+              continue;
+            }
+          }
+        }
+      }
+      const cyoaEndTag = "</cyoa-block>";
+      const lastCyoaEnd = remaining.lastIndexOf(cyoaEndTag);
+      if (lastCyoaEnd !== -1) {
+        const afterCyoa = remaining.slice(lastCyoaEnd + cyoaEndTag.length);
+        if (/^\s*$/.test(afterCyoa)) {
+          const cyoaStartTag = "<cyoa-block>";
+          const cyoaStartIndex = remaining.lastIndexOf(cyoaStartTag, lastCyoaEnd);
+          if (cyoaStartIndex !== -1) {
+            const beforeCyoa = remaining.slice(0, cyoaStartIndex);
+            const sepMatch = beforeCyoa.match(/(?:\n\s*(?:---+|\*\*\*+|___+)\s*\n\s*)$/);
+            const cutIndex = sepMatch ? beforeCyoa.length - sepMatch[0].length : cyoaStartIndex;
+            const trailingCyoaSegment = remaining.slice(cutIndex);
+            suffix = trailingCyoaSegment + suffix;
+            remaining = remaining.slice(0, cutIndex);
+            advancedSuffix = true;
+            continue;
+          }
+        }
+      }
+    }
+  }
+  const originalBody = remaining;
+  let maskedBody = remaining;
+  if (protectInlineHtml) {
+    let result = "";
+    let i = 0;
+    while (i < remaining.length) {
+      if (remaining.startsWith("<!--", i)) {
+        const end = remaining.indexOf("-->", i);
+        if (end !== -1) {
+          const rawBlock = remaining.slice(i, end + 3);
+          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+          placeholders.set(placeholder, rawBlock);
+          result += placeholder;
+          i = end + 3;
+          continue;
+        }
+      }
+      if (remaining.startsWith("<cyoa-block", i)) {
+        const end = remaining.indexOf("</cyoa-block>", i);
+        if (end !== -1) {
+          const rawBlock = remaining.slice(i, end + "</cyoa-block>".length);
+          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+          placeholders.set(placeholder, rawBlock);
+          result += placeholder;
+          i = end + "</cyoa-block>".length;
+          continue;
+        }
+      }
+      const specialTagMatch = remaining.slice(i).match(/^<(style|script|svg|table|details)[\s>]/i);
+      if (specialTagMatch) {
+        const tagName = specialTagMatch[1].toLowerCase();
+        const closeTag = `</${tagName}>`;
+        const endIdx = remaining.toLowerCase().indexOf(closeTag, i);
+        if (endIdx !== -1) {
+          const rawBlock = remaining.slice(i, endIdx + closeTag.length);
+          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+          placeholders.set(placeholder, rawBlock);
+          result += placeholder;
+          i = endIdx + closeTag.length;
+          continue;
+        }
+      }
+      if (/^<div[\s>]/i.test(remaining.slice(i))) {
+        const endIdx = findMatchingClosingTag(remaining, i, "div");
+        if (endIdx !== -1) {
+          const rawBlock = remaining.slice(i, endIdx);
+          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+          placeholders.set(placeholder, rawBlock);
+          result += placeholder;
+          i = endIdx;
+          continue;
+        }
+      }
+      result += remaining[i];
+      i++;
+    }
+    maskedBody = result;
+  }
+  const totalProtectedCount = (prefix ? 1 : 0) + (suffix ? 1 : 0) + placeholders.size;
+  return {
+    prefix,
+    suffix,
+    maskedBody,
+    originalBody,
+    placeholders,
+    totalProtectedCount
+  };
+}
+function reinsertOmittedBlock(transformed, originalBody, placeholder, originalBlock) {
+  const origIndex = originalBody.indexOf(placeholder);
+  if (origIndex !== -1) {
+    const preWindow = originalBody.slice(Math.max(0, origIndex - 40), origIndex).trim();
+    if (preWindow.length > 10) {
+      const foundIdx = transformed.indexOf(preWindow);
+      if (foundIdx !== -1) {
+        const insertPos = foundIdx + preWindow.length;
+        return `${transformed.slice(0, insertPos)}
+
+${originalBlock}
+
+${transformed.slice(insertPos)}`;
+      }
+    }
+  }
+  return `${transformed}
+
+${originalBlock}`;
+}
+function restoreProtectedBlocks(transformedBody, protectedData) {
+  let result = transformedBody;
+  for (const [placeholder, originalBlock] of protectedData.placeholders.entries()) {
+    if (result.includes(placeholder)) {
+      result = result.split(placeholder).join(originalBlock);
+    } else {
+      result = reinsertOmittedBlock(result, protectedData.maskedBody, placeholder, originalBlock);
+    }
+  }
+  return `${protectedData.prefix}${result}${protectedData.suffix}`;
+}
+
 // src/recast/pipeline.ts
 function cleanModelOutput(text) {
   if (!text)
@@ -1247,11 +1503,17 @@ function cleanModelOutput(text) {
   }
   return cleaned;
 }
-async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId, settings, defaultConnectionId, onStreamUpdate) {
+async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId, settings, defaultConnectionId, onStreamUpdate, protectedData) {
   if (!pass.enabled)
     return textToTransform;
   const tStart = Date.now();
-  let systemPrompt = pass.prompt.trim();
+  let systemPrompt = pass.prompt || `You are an expert prose editor. Rewrite the text to improve flow, voice, and pacing.
+Return only the rewritten text.`;
+  if (protectedData && protectedData.placeholders.size > 0) {
+    systemPrompt += `
+
+[CRITICAL PRESERVATION NOTICE: The text contains preserved block tokens formatted as \u27E6LR_PROTECT_N\u27E7 representing intact UI cards and embedded structures. You MUST keep all \u27E6LR_PROTECT_N\u27E7 tokens verbatim in their original positions without deleting, altering, or translating them.]`;
+  }
   let charCardXml = "";
   if (pass.includeCharCard && sp?.characters?.get) {
     try {
@@ -1516,7 +1778,19 @@ async function runRecastPipeline(sp, options) {
     throw new Error("All passes in the active Recast preset are disabled. Please enable at least one pass.");
   }
   const tStart = Date.now();
-  let currentText = rawText;
+  const protectEnabled = settings.protectTagsAndHtml !== false;
+  const protectedData = protectEnabled ? extractAndProtectBlocks(rawText) : {
+    prefix: "",
+    suffix: "",
+    maskedBody: rawText,
+    originalBody: rawText,
+    placeholders: new Map,
+    totalProtectedCount: 0
+  };
+  if (protectEnabled && protectedData.totalProtectedCount > 0) {
+    console.log(`[Lumi:REcursion:Recast] Protected ${protectedData.totalProtectedCount} non-prose blocks (prefix: ${protectedData.prefix.length}c, suffix: ${protectedData.suffix.length}c, inline: ${protectedData.placeholders.size})`);
+  }
+  let currentText = protectedData.maskedBody;
   const snapshots = [rawText];
   const passNames = [];
   const errors = [];
@@ -1558,21 +1832,22 @@ async function runRecastPipeline(sp, options) {
           wordCount: streamInfo.wordCount,
           streamPreview: streamInfo.streamPreview
         });
-      });
+      }, protectedData);
       currentText = passOutput;
-      snapshots.push(currentText);
+      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     } catch (err) {
       console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
       const errMsg = err?.message || String(err);
       errors.push({ passName: pass.name, error: errMsg });
       sp?.toast?.error?.(`Pass "${pass.name}" failed: ${errMsg}`);
-      snapshots.push(currentText);
+      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     }
   }
   if (errors.length > 0 && errors.length === enabledPasses.length) {
     throw new Error(`All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join("; ")}`);
   }
   const totalLatencyMs = Date.now() - tStart;
+  const finalTransformedText = restoreProtectedBlocks(currentText, protectedData);
   onProgress?.({
     active: false,
     currentPassIndex: enabledPasses.length,
@@ -1586,7 +1861,7 @@ async function runRecastPipeline(sp, options) {
     chatId,
     messageId,
     originalText: rawText,
-    transformedText: currentText,
+    transformedText: finalTransformedText,
     snapshots,
     passNames,
     totalLatencyMs
