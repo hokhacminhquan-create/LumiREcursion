@@ -5,7 +5,7 @@
  */
 
 import type { RecastPass, RecastPreset, RecastSettings, RecastDiffData, RecastProgress } from './types';
-import { extractAndProtectBlocks, restoreProtectedBlocks, type ProtectedContent } from './block-protection';
+import { extractAndProtectBlocks, restoreProtectedBlocks, normalizeProtectionPlaceholders, type ProtectedContent } from './block-protection';
 
 function cleanModelOutput(text: string): string {
   if (!text) return '';
@@ -58,6 +58,7 @@ export async function runSinglePass(
   if (protectedData && protectedData.placeholders.size > 0) {
     systemPrompt += `\n\n[CRITICAL PRESERVATION NOTICE: The text contains preserved block tokens formatted as ⟦LR_PROTECT_N⟧ representing intact UI cards and embedded structures. You MUST keep all ⟦LR_PROTECT_N⟧ tokens verbatim in their original positions without deleting, altering, or translating them.]`;
   }
+  systemPrompt += `\n\n[DIALOGUE PRESERVATION NOTICE: Preserve all character speech and dialogue styling tags verbatim (such as <font color="...">dialogue</font> or <span style="...">dialogue</span>). Do not strip, modify, or remove font color or dialogue styling tags.]`;
 
   // 1. Retrieve Character Details if requested
   let charCardXml = '';
@@ -215,8 +216,10 @@ export async function runSinglePass(
     reasoningParam = { source: 'custom', apiReasoning: true, effort: effectiveReasoning };
   }
 
-  // Max tokens & temperature
-  const maxTokens = pass.maxTokens ?? settings?.maxTokens ?? 1000;
+  // Max tokens & temperature (dynamically scale to prevent mid-story truncation for long text)
+  const estimatedInputTokens = Math.ceil(textToTransform.length / 3.5);
+  const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 2048;
+  const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.3)));
   const temperature = pass.temperature ?? 0.3;
 
   // Timeouts
@@ -250,7 +253,7 @@ export async function runSinglePass(
     connection_id: effectiveConnId,
     parameters: {
       temperature,
-      max_tokens: maxTokens
+      max_tokens: effectiveMaxTokens
     },
     ...(effectiveModel ? { model: effectiveModel } : {}),
     ...(selectedConn?.provider ? { provider: selectedConn.provider } : {}),
@@ -260,7 +263,7 @@ export async function runSinglePass(
   };
 
   console.log(
-    `[Lumi:REcursion:Recast] Starting pass "${pass.name}" [conn: ${effectiveConnId}, model: ${effectiveModel || '(conn default)'}, reasoning: ${effectiveReasoning}, max_tokens: ${maxTokens}, ttft_limit: ${ttftTimeoutSec}s]`
+    `[Lumi:REcursion:Recast] Starting pass "${pass.name}" [conn: ${effectiveConnId}, model: ${effectiveModel || '(conn default)'}, reasoning: ${effectiveReasoning}, max_tokens: ${effectiveMaxTokens}, ttft_limit: ${ttftTimeoutSec}s]`
   );
 
   let outputText = '';
@@ -445,7 +448,7 @@ export async function runRecastPipeline(
         protectedData
       );
 
-      currentText = passOutput;
+      currentText = normalizeProtectionPlaceholders(passOutput, protectedData.placeholders);
       snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     } catch (err: any) {
       console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);

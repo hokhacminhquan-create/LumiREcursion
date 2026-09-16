@@ -1253,24 +1253,35 @@ var VOID_HTML_TAGS = new Set([
   "track",
   "wbr"
 ]);
-var INLINE_PROSE_TAGS = new Set([
-  "b",
-  "i",
-  "em",
-  "strong",
-  "s",
-  "u",
-  "strike",
-  "del",
-  "mark",
-  "sub",
-  "sup",
-  "small",
-  "q",
-  "abbr",
-  "cite",
-  "dfn",
-  "time"
+var STRUCTURAL_CONTAINER_TAGS = new Set([
+  "div",
+  "table",
+  "thead",
+  "tbody",
+  "tfoot",
+  "tr",
+  "th",
+  "td",
+  "svg",
+  "style",
+  "script",
+  "details",
+  "summary",
+  "canvas",
+  "video",
+  "audio",
+  "iframe",
+  "form",
+  "fieldset",
+  "section",
+  "article",
+  "aside",
+  "nav",
+  "header",
+  "footer",
+  "main",
+  "figure",
+  "figcaption"
 ]);
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1351,15 +1362,10 @@ function shouldProtectTag(tagName, fullTagHeader, isSelfClosing) {
   const lowerTag = tagName.toLowerCase();
   if (tagName.includes("-"))
     return true;
-  if (VOID_HTML_TAGS.has(lowerTag) || isSelfClosing)
+  if (lowerTag === "img" || lowerTag === "hr")
     return true;
-  const afterName = fullTagHeader.slice(1 + tagName.length).replace(/>$/, "").trim();
-  if (afterName.length > 0 && afterName !== "/") {
+  if (STRUCTURAL_CONTAINER_TAGS.has(lowerTag))
     return true;
-  }
-  if (!INLINE_PROSE_TAGS.has(lowerTag)) {
-    return true;
-  }
   return false;
 }
 function tryParseJson(str) {
@@ -1384,6 +1390,7 @@ function extractAndProtectBlocks(text, options = {}) {
   let prefix = "";
   let suffix = "";
   const placeholders = new Map;
+  const relativePositions = new Map;
   let blockCounter = 0;
   if (protectHeaderComments) {
     let advanced = true;
@@ -1538,6 +1545,7 @@ function extractAndProtectBlocks(text, options = {}) {
           const rawBlock = remaining.slice(i, blockEnd);
           const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
           placeholders.set(placeholder, rawBlock);
+          relativePositions.set(placeholder, remaining.length > 0 ? i / remaining.length : 0);
           result += placeholder;
           i = blockEnd;
           continue;
@@ -1549,6 +1557,7 @@ function extractAndProtectBlocks(text, options = {}) {
           const rawBlock = remaining.slice(i, end + 3);
           const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
           placeholders.set(placeholder, rawBlock);
+          relativePositions.set(placeholder, remaining.length > 0 ? i / remaining.length : 0);
           result += placeholder;
           i = end + 3;
           continue;
@@ -1561,6 +1570,7 @@ function extractAndProtectBlocks(text, options = {}) {
             const rawBlock = remaining.slice(i, header.endIndex);
             const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
             placeholders.set(placeholder, rawBlock);
+            relativePositions.set(placeholder, remaining.length > 0 ? i / remaining.length : 0);
             result += placeholder;
             i = header.endIndex;
             continue;
@@ -1570,6 +1580,7 @@ function extractAndProtectBlocks(text, options = {}) {
             const rawBlock = remaining.slice(i, endIdx);
             const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
             placeholders.set(placeholder, rawBlock);
+            relativePositions.set(placeholder, remaining.length > 0 ? i / remaining.length : 0);
             result += placeholder;
             i = endIdx;
             continue;
@@ -1588,55 +1599,41 @@ function extractAndProtectBlocks(text, options = {}) {
     maskedBody,
     originalBody,
     placeholders,
+    relativePositions,
     totalProtectedCount
   };
 }
-function reinsertOmittedBlock(transformed, maskedBody, placeholder, originalBlock) {
-  const bareIdMatch = placeholder.match(/\d+/);
-  if (bareIdMatch) {
-    const id = bareIdMatch[0];
-    const mutationPattern = new RegExp(`(?:\\[\\[|\\[|<|\u27E6|\\()\\s*LR_PROTECT_${id}\\s*(?:\\]\\]|\\]|>|\u27E7|\\))`, "g");
-    if (mutationPattern.test(transformed)) {
-      return transformed.replace(mutationPattern, originalBlock);
-    }
+function normalizeProtectionPlaceholders(text, placeholders) {
+  let normalized = text;
+  for (const placeholder of placeholders.keys()) {
+    const numMatch = placeholder.match(/\d+/);
+    if (!numMatch)
+      continue;
+    const id = numMatch[0];
+    const pattern = new RegExp(`(?:\\[\\[|\\[|<|\u27E6|\\(|\\{)?\\s*LR_PROTECT_${id}(?!\\d)\\s*(?:\\]\\]|\\]|>|\u27E7|\\)|\\})?`, "g");
+    normalized = normalized.replace(pattern, placeholder);
   }
-  const origIndex = maskedBody.indexOf(placeholder);
-  if (origIndex !== -1) {
-    const preSlice = maskedBody.slice(Math.max(0, origIndex - 50), origIndex).trim();
-    if (preSlice.length >= 8) {
-      const anchorPos = transformed.indexOf(preSlice);
-      if (anchorPos !== -1) {
-        const insertPos = anchorPos + preSlice.length;
-        return `${transformed.slice(0, insertPos)}
-
-${originalBlock}
-
-${transformed.slice(insertPos)}`;
-      }
-    }
-    const afterSlice = maskedBody.slice(origIndex + placeholder.length, Math.min(maskedBody.length, origIndex + placeholder.length + 50)).trim();
-    if (afterSlice.length >= 8) {
-      const anchorPos = transformed.indexOf(afterSlice);
-      if (anchorPos !== -1) {
-        return `${transformed.slice(0, anchorPos)}
-
-${originalBlock}
-
-${transformed.slice(anchorPos)}`;
-      }
-    }
-  }
-  return `${transformed}
-
-${originalBlock}`;
+  return normalized;
 }
 function restoreProtectedBlocks(transformedBody, protectedData) {
-  let result = transformedBody;
+  let result = normalizeProtectionPlaceholders(transformedBody, protectedData.placeholders);
   for (const [placeholder, originalBlock] of protectedData.placeholders.entries()) {
     if (result.includes(placeholder)) {
       result = result.split(placeholder).join(originalBlock);
     } else {
-      result = reinsertOmittedBlock(result, protectedData.maskedBody, placeholder, originalBlock);
+      const relPos = protectedData.relativePositions?.get(placeholder) ?? 0.5;
+      const paragraphs = result.split(/\n\n+/);
+      if (paragraphs.length <= 1) {
+        result = `${result}
+
+${originalBlock}`;
+      } else {
+        const targetIdx = Math.min(paragraphs.length, Math.max(0, Math.round(relPos * (paragraphs.length - 1))));
+        paragraphs.splice(targetIdx, 0, originalBlock);
+        result = paragraphs.join(`
+
+`);
+      }
     }
   }
   return `${protectedData.prefix}${result}${protectedData.suffix}`;
@@ -1671,6 +1668,9 @@ Return only the rewritten text.`;
 
 [CRITICAL PRESERVATION NOTICE: The text contains preserved block tokens formatted as \u27E6LR_PROTECT_N\u27E7 representing intact UI cards and embedded structures. You MUST keep all \u27E6LR_PROTECT_N\u27E7 tokens verbatim in their original positions without deleting, altering, or translating them.]`;
   }
+  systemPrompt += `
+
+[DIALOGUE PRESERVATION NOTICE: Preserve all character speech and dialogue styling tags verbatim (such as <font color="...">dialogue</font> or <span style="...">dialogue</span>). Do not strip, modify, or remove font color or dialogue styling tags.]`;
   let charCardXml = "";
   if (pass.includeCharCard && sp?.characters?.get) {
     try {
@@ -1817,7 +1817,9 @@ ${textToTransform}
   } else if (effectiveReasoning !== "inherit") {
     reasoningParam = { source: "custom", apiReasoning: true, effort: effectiveReasoning };
   }
-  const maxTokens = pass.maxTokens ?? settings?.maxTokens ?? 1000;
+  const estimatedInputTokens = Math.ceil(textToTransform.length / 3.5);
+  const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 2048;
+  const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.3)));
   const temperature = pass.temperature ?? 0.3;
   const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 20;
   const passTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 60;
@@ -1843,7 +1845,7 @@ ${textToTransform}
     connection_id: effectiveConnId,
     parameters: {
       temperature,
-      max_tokens: maxTokens
+      max_tokens: effectiveMaxTokens
     },
     ...effectiveModel ? { model: effectiveModel } : {},
     ...selectedConn?.provider ? { provider: selectedConn.provider } : {},
@@ -1851,7 +1853,7 @@ ${textToTransform}
     ...userId ? { userId } : {},
     signal: abortController.signal
   };
-  console.log(`[Lumi:REcursion:Recast] Starting pass "${pass.name}" [conn: ${effectiveConnId}, model: ${effectiveModel || "(conn default)"}, reasoning: ${effectiveReasoning}, max_tokens: ${maxTokens}, ttft_limit: ${ttftTimeoutSec}s]`);
+  console.log(`[Lumi:REcursion:Recast] Starting pass "${pass.name}" [conn: ${effectiveConnId}, model: ${effectiveModel || "(conn default)"}, reasoning: ${effectiveReasoning}, max_tokens: ${effectiveMaxTokens}, ttft_limit: ${ttftTimeoutSec}s]`);
   let outputText = "";
   let thoughtTokens = 0;
   let wordCount = 0;
@@ -1990,7 +1992,7 @@ async function runRecastPipeline(sp, options) {
           streamPreview: streamInfo.streamPreview
         });
       }, protectedData);
-      currentText = passOutput;
+      currentText = normalizeProtectionPlaceholders(passOutput, protectedData.placeholders);
       snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     } catch (err) {
       console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);

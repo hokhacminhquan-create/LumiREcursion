@@ -23,6 +23,8 @@ export interface ProtectedContent {
   originalBody: string;
   /** Mapping of placeholder token (e.g. ⟦LR_PROTECT_0⟧) to its original verbatim text */
   placeholders: Map<string, string>;
+  /** Relative original positions of placeholders (0.0 to 1.0) within original prose for fallback placement */
+  relativePositions?: Map<string, number>;
   /** Total count of protected elements (prefix, suffix, inline blocks) */
   totalProtectedCount: number;
 }
@@ -48,13 +50,14 @@ const VOID_HTML_TAGS = new Set([
 ]);
 
 /**
- * Standard inline prose formatting tags without structural layout significance.
- * If these have NO attributes, they can be treated as standard prose emphasis.
- * If they have ANY attributes (e.g. class, style, id), they are protected.
+ * Structural container tags that must be protected as opaque blocks so their
+ * styling, layout, tables, cards, canvas, and script logic are never corrupted by LLM rewriting.
  */
-const INLINE_PROSE_TAGS = new Set([
-  'b', 'i', 'em', 'strong', 's', 'u', 'strike', 'del', 'mark',
-  'sub', 'sup', 'small', 'q', 'abbr', 'cite', 'dfn', 'time'
+export const STRUCTURAL_CONTAINER_TAGS = new Set([
+  'div', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+  'svg', 'style', 'script', 'details', 'summary', 'canvas',
+  'video', 'audio', 'iframe', 'form', 'fieldset', 'section',
+  'article', 'aside', 'nav', 'header', 'footer', 'main', 'figure', 'figcaption'
 ]);
 
 /**
@@ -157,34 +160,25 @@ function findBalancedClosingTag(text: string, startIndex: number, tagName: strin
 
 /**
  * Determines whether an opening tag should be protected from LLM rewriting.
- * Universal rule: Protect ANY tag that is:
- * 1. A custom element (has hyphen, e.g. `<cyoa-block>`, `<inventory-hud>`)
- * 2. Has attributes (e.g. `style=`, `class=`, `id=`, etc.)
- * 3. Is a void HTML tag (e.g. `<img>`, `<hr>`)
- * 4. Is not in the tiny list of basic unstyled inline formatting tags (b, i, em, strong, s, u, mark).
+ * Rule: Protect structural layout/widget containers, custom elements, and standalone void elements.
+ * Leave inline prose typography and character dialogue formatting (<font color="...">, <span>, <b>, <i>, etc.)
+ * in the prompt so the LLM has complete narrative context and preserves dialogue color tags.
  */
 function shouldProtectTag(tagName: string, fullTagHeader: string, isSelfClosing: boolean): boolean {
   const lowerTag = tagName.toLowerCase();
 
-  // 1. Custom element (Web Components specification requires hyphen)
+  // 1. Custom element (Web Components specification requires hyphen e.g. <cyoa-block>, <status-hud>)
   if (tagName.includes('-')) return true;
 
-  // 2. Void tag
-  if (VOID_HTML_TAGS.has(lowerTag) || isSelfClosing) return true;
+  // 2. Void elements that are standalone layout objects (e.g. <img>, <hr>)
+  if (lowerTag === 'img' || lowerTag === 'hr') return true;
 
-  // 3. Has attributes (any attribute = formatting, class, state, or event handlers)
-  const afterName = fullTagHeader.slice(1 + tagName.length).replace(/>$/, '').trim();
-  if (afterName.length > 0 && afterName !== '/') {
-    // If it has attributes or parameters, always protect!
-    return true;
-  }
+  // 3. Structural layout containers, cards, tables, canvas, style, script
+  if (STRUCTURAL_CONTAINER_TAGS.has(lowerTag)) return true;
 
-  // 4. Any tag that is NOT a trivial inline typography tag
-  if (!INLINE_PROSE_TAGS.has(lowerTag)) {
-    return true;
-  }
-
-  // Pure inline prose tag without attributes (e.g. `<i>`, `<b>`, `<em>`)
+  // Pure inline prose typography & dialogue styling tags (font, span, b, i, em, strong, etc.)
+  // must NOT be excised into placeholders. They stay in the prose flow so the LLM retains
+  // character dialogue and styling.
   return false;
 }
 
@@ -221,6 +215,7 @@ export function extractAndProtectBlocks(
   let prefix = '';
   let suffix = '';
   const placeholders = new Map<string, string>();
+  const relativePositions = new Map<string, number>();
   let blockCounter = 0;
 
   // 1. UNIVERSAL PREFIX EXTRACTION (Leading comments, GABI, frontmatter, leading separators)
@@ -408,6 +403,7 @@ export function extractAndProtectBlocks(
           const rawBlock = remaining.slice(i, blockEnd);
           const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
           placeholders.set(placeholder, rawBlock);
+          relativePositions.set(placeholder, remaining.length > 0 ? (i / remaining.length) : 0);
           result += placeholder;
           i = blockEnd;
           continue;
@@ -421,6 +417,7 @@ export function extractAndProtectBlocks(
           const rawBlock = remaining.slice(i, end + 3);
           const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
           placeholders.set(placeholder, rawBlock);
+          relativePositions.set(placeholder, remaining.length > 0 ? (i / remaining.length) : 0);
           result += placeholder;
           i = end + 3;
           continue;
@@ -436,6 +433,7 @@ export function extractAndProtectBlocks(
             const rawBlock = remaining.slice(i, header.endIndex);
             const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
             placeholders.set(placeholder, rawBlock);
+            relativePositions.set(placeholder, remaining.length > 0 ? (i / remaining.length) : 0);
             result += placeholder;
             i = header.endIndex;
             continue;
@@ -447,6 +445,7 @@ export function extractAndProtectBlocks(
             const rawBlock = remaining.slice(i, endIdx);
             const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
             placeholders.set(placeholder, rawBlock);
+            relativePositions.set(placeholder, remaining.length > 0 ? (i / remaining.length) : 0);
             result += placeholder;
             i = endIdx;
             continue;
@@ -470,77 +469,63 @@ export function extractAndProtectBlocks(
     maskedBody,
     originalBody,
     placeholders,
+    relativePositions,
     totalProtectedCount
   };
 }
 
 /**
- * Re-inserts an omitted block if the LLM deleted the placeholder token.
- * Uses contextual anchor matching before and after the placeholder in the original text.
+ * Normalizes placeholder tokens that may have been slightly mutated by LLMs
+ * (e.g. [LR_PROTECT_0], <LR_PROTECT_0>, {LR_PROTECT_0}, (LR_PROTECT_0)) back to canonical ⟦LR_PROTECT_N⟧.
  */
-function reinsertOmittedBlock(
-  transformed: string,
-  maskedBody: string,
-  placeholder: string,
-  originalBlock: string
+export function normalizeProtectionPlaceholders(
+  text: string,
+  placeholders: Map<string, string>
 ): string {
-  // 1. Check if the placeholder was slightly mutated by LLM brackets (e.g. [[...]], <...>, [...])
-  const bareIdMatch = placeholder.match(/\d+/);
-  if (bareIdMatch) {
-    const id = bareIdMatch[0];
-    const mutationPattern = new RegExp(`(?:\\[\\[|\\[|<|⟦|\\()\\s*LR_PROTECT_${id}\\s*(?:\\]\\]|\\]|>|⟧|\\))`, 'g');
-    if (mutationPattern.test(transformed)) {
-      return transformed.replace(mutationPattern, originalBlock);
-    }
+  let normalized = text;
+  for (const placeholder of placeholders.keys()) {
+    const numMatch = placeholder.match(/\d+/);
+    if (!numMatch) continue;
+    const id = numMatch[0];
+    const pattern = new RegExp(`(?:\\[\\[|\\[|<|⟦|\\(|\\{)?\\s*LR_PROTECT_${id}(?!\\d)\\s*(?:\\]\\]|\\]|>|⟧|\\)|\\})?`, 'g');
+    normalized = normalized.replace(pattern, placeholder);
   }
-
-  // 2. Context anchor matching: Find surrounding text in maskedBody
-  const origIndex = maskedBody.indexOf(placeholder);
-  if (origIndex !== -1) {
-    // Look backwards up to 50 characters for an anchor string
-    const preSlice = maskedBody.slice(Math.max(0, origIndex - 50), origIndex).trim();
-    if (preSlice.length >= 8) {
-      // Find the best matching anchor in transformed text
-      const anchorPos = transformed.indexOf(preSlice);
-      if (anchorPos !== -1) {
-        const insertPos = anchorPos + preSlice.length;
-        return `${transformed.slice(0, insertPos)}\n\n${originalBlock}\n\n${transformed.slice(insertPos)}`;
-      }
-    }
-
-    // Look forwards up to 50 characters for an anchor string
-    const afterSlice = maskedBody.slice(origIndex + placeholder.length, Math.min(maskedBody.length, origIndex + placeholder.length + 50)).trim();
-    if (afterSlice.length >= 8) {
-      const anchorPos = transformed.indexOf(afterSlice);
-      if (anchorPos !== -1) {
-        return `${transformed.slice(0, anchorPos)}\n\n${originalBlock}\n\n${transformed.slice(anchorPos)}`;
-      }
-    }
-  }
-
-  // 3. Fallback: Append before end of transformed body
-  return `${transformed}\n\n${originalBlock}`;
+  return normalized;
 }
 
 /**
  * Restores all protected placeholders, leading prefix metadata, and trailing suffix data.
+ * Resilient against token deletion or bracket alteration by LLMs.
  */
 export function restoreProtectedBlocks(
   transformedBody: string,
   protectedData: ProtectedContent
 ): string {
-  let result = transformedBody;
+  // 1. First normalize any bracket or delimiter mutations made by the LLM
+  let result = normalizeProtectionPlaceholders(transformedBody, protectedData.placeholders);
 
-  // 1. Restore all inline placeholders
+  // 2. Restore all inline placeholders
   for (const [placeholder, originalBlock] of protectedData.placeholders.entries()) {
     if (result.includes(placeholder)) {
       result = result.split(placeholder).join(originalBlock);
     } else {
-      // LLM dropped or mutated placeholder token — use resilient recovery
-      result = reinsertOmittedBlock(result, protectedData.maskedBody, placeholder, originalBlock);
+      // LLM completely dropped the placeholder token: fallback to clean paragraph boundary.
+      // Never slice into random substrings or tag attributes!
+      const relPos = protectedData.relativePositions?.get(placeholder) ?? 0.5;
+      const paragraphs = result.split(/\n\n+/);
+      if (paragraphs.length <= 1) {
+        result = `${result}\n\n${originalBlock}`;
+      } else {
+        const targetIdx = Math.min(
+          paragraphs.length,
+          Math.max(0, Math.round(relPos * (paragraphs.length - 1)))
+        );
+        paragraphs.splice(targetIdx, 0, originalBlock);
+        result = paragraphs.join('\n\n');
+      }
     }
   }
 
-  // 2. Re-attach prefix and suffix verbatim
+  // 3. Re-attach prefix and suffix verbatim
   return `${protectedData.prefix}${result}${protectedData.suffix}`;
 }
