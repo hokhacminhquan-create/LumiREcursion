@@ -1233,22 +1233,86 @@ async function importCharacterPayload(spindle2, characterId, importedData, userI
 // src/recast/block-protection.ts
 var PLACEHOLDER_PREFIX = "\u27E6LR_PROTECT_";
 var PLACEHOLDER_SUFFIX = "\u27E7";
-function findMatchingClosingTag(text, startIndex, tagName) {
-  const openTagPattern = new RegExp(`^<${tagName}(?:[\\s>])`, "i");
-  const closeTagPattern = new RegExp(`^<\\/${tagName}(?:[\\s>])`, "i");
+var VOID_HTML_TAGS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr"
+]);
+var INLINE_PROSE_TAGS = new Set([
+  "b",
+  "i",
+  "em",
+  "strong",
+  "s",
+  "u",
+  "strike",
+  "del",
+  "mark",
+  "sub",
+  "sup",
+  "small",
+  "q",
+  "abbr",
+  "cite",
+  "dfn",
+  "time"
+]);
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function scanTagHeader(text, startIndex) {
+  if (text[startIndex] !== "<")
+    return null;
+  const match = text.slice(startIndex).match(/^<([a-zA-Z][a-zA-Z0-9_-]*)/);
+  if (!match)
+    return null;
+  const tagName = match[1];
+  let inQuote = null;
+  let i = startIndex + match[0].length;
+  while (i < text.length) {
+    const ch = text[i];
+    if (inQuote) {
+      if (ch === inQuote) {
+        inQuote = null;
+      }
+    } else {
+      if (ch === '"' || ch === "'") {
+        inQuote = ch;
+      } else if (ch === ">") {
+        const fullHeader = text.slice(startIndex, i + 1);
+        const isSelfClosing = fullHeader.trim().endsWith("/>") || VOID_HTML_TAGS.has(tagName.toLowerCase());
+        return {
+          fullHeader,
+          tagName,
+          isSelfClosing,
+          endIndex: i + 1
+        };
+      }
+    }
+    i++;
+  }
+  return null;
+}
+function findBalancedClosingTag(text, startIndex, tagName) {
+  const openTagRegex = new RegExp(`^<${escapeRegex(tagName)}(?:[\\s>/])`, "i");
+  const closeTagRegex = new RegExp(`^<\\/${escapeRegex(tagName)}(?:[\\s>])`, "i");
   let depth = 0;
   let i = startIndex;
   while (i < text.length) {
     if (text[i] === "<") {
       const slice = text.slice(i);
-      if (openTagPattern.test(slice)) {
-        depth++;
-        const tagEnd = text.indexOf(">", i);
-        if (tagEnd === -1)
-          return -1;
-        i = tagEnd + 1;
-        continue;
-      } else if (closeTagPattern.test(slice)) {
+      if (closeTagRegex.test(slice)) {
         depth--;
         const tagEnd = text.indexOf(">", i);
         if (tagEnd === -1)
@@ -1259,16 +1323,47 @@ function findMatchingClosingTag(text, startIndex, tagName) {
         i = tagEnd + 1;
         continue;
       }
+      if (openTagRegex.test(slice)) {
+        const header = scanTagHeader(text, i);
+        if (header) {
+          if (header.isSelfClosing) {
+            if (i === startIndex) {
+              return header.endIndex;
+            }
+            i = header.endIndex;
+            continue;
+          }
+          depth++;
+          i = header.endIndex;
+          continue;
+        }
+      }
     }
     i++;
   }
   return -1;
 }
+function shouldProtectTag(tagName, fullTagHeader, isSelfClosing) {
+  const lowerTag = tagName.toLowerCase();
+  if (tagName.includes("-"))
+    return true;
+  if (VOID_HTML_TAGS.has(lowerTag) || isSelfClosing)
+    return true;
+  const afterName = fullTagHeader.slice(1 + tagName.length).replace(/>$/, "").trim();
+  if (afterName.length > 0 && afterName !== "/") {
+    return true;
+  }
+  if (!INLINE_PROSE_TAGS.has(lowerTag)) {
+    return true;
+  }
+  return false;
+}
 function tryParseJson(str) {
   try {
     const trimmed = str.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}"))
+    if (!(trimmed.startsWith("{") && trimmed.endsWith("}") || trimmed.startsWith("[") && trimmed.endsWith("]"))) {
       return false;
+    }
     JSON.parse(trimmed);
     return true;
   } catch {
@@ -1295,10 +1390,10 @@ function extractAndProtectBlocks(text, options = {}) {
         prefix += wsMatch[0];
         remaining = remaining.slice(wsMatch[0].length);
       }
-      const pairedStartMatch = remaining.match(/^<!--\s*([A-Za-z0-9_-]+)_START\s*-->/i);
+      const pairedStartMatch = remaining.match(/^<!--\s*([A-Za-z0-9_-]+)(?:_START|_BEGIN)\s*-->/i);
       if (pairedStartMatch) {
         const tagName = pairedStartMatch[1];
-        const endTagPattern = new RegExp(`<!--\\s*${tagName}_END\\s*-->`, "i");
+        const endTagPattern = new RegExp(`<!--\\s*${escapeRegex(tagName)}(?:_END|_STOP)\\s*-->`, "i");
         const endMatch = remaining.match(endTagPattern);
         if (endMatch && endMatch.index !== undefined) {
           const blockEndIndex = endMatch.index + endMatch[0].length;
@@ -1331,6 +1426,13 @@ function extractAndProtectBlocks(text, options = {}) {
     let advancedSuffix = true;
     while (advancedSuffix) {
       advancedSuffix = false;
+      const trailingHrMatch = remaining.match(/(?:\n\s*(?:---+|\*\*\*+|___+)\s*)+$/);
+      if (trailingHrMatch && trailingHrMatch.index !== undefined && trailingHrMatch.index > 0) {
+        suffix = remaining.slice(trailingHrMatch.index) + suffix;
+        remaining = remaining.slice(0, trailingHrMatch.index);
+        advancedSuffix = true;
+        continue;
+      }
       const lastCloseBrace = remaining.lastIndexOf("}");
       if (lastCloseBrace !== -1) {
         const afterClose = remaining.slice(lastCloseBrace + 1);
@@ -1364,23 +1466,51 @@ function extractAndProtectBlocks(text, options = {}) {
           }
         }
       }
-      const cyoaEndTag = "</cyoa-block>";
-      const lastCyoaEnd = remaining.lastIndexOf(cyoaEndTag);
-      if (lastCyoaEnd !== -1) {
-        const afterCyoa = remaining.slice(lastCyoaEnd + cyoaEndTag.length);
-        if (/^\s*$/.test(afterCyoa)) {
-          const cyoaStartTag = "<cyoa-block>";
-          const cyoaStartIndex = remaining.lastIndexOf(cyoaStartTag, lastCyoaEnd);
-          if (cyoaStartIndex !== -1) {
-            const beforeCyoa = remaining.slice(0, cyoaStartIndex);
-            const sepMatch = beforeCyoa.match(/(?:\n\s*(?:---+|\*\*\*+|___+)\s*\n\s*)$/);
-            const cutIndex = sepMatch ? beforeCyoa.length - sepMatch[0].length : cyoaStartIndex;
-            const trailingCyoaSegment = remaining.slice(cutIndex);
-            suffix = trailingCyoaSegment + suffix;
-            remaining = remaining.slice(0, cutIndex);
-            advancedSuffix = true;
-            continue;
+      const codeFenceMatch = remaining.match(/(?:\n\s*(?:---+|\*\*\*+|___+)\s*\n\s*)?```[a-zA-Z0-9_-]*\s*\n[\s\S]*?\n```\s*$/);
+      if (codeFenceMatch && codeFenceMatch.index !== undefined) {
+        suffix = remaining.slice(codeFenceMatch.index) + suffix;
+        remaining = remaining.slice(0, codeFenceMatch.index);
+        advancedSuffix = true;
+        continue;
+      }
+      const trailingCloseTagMatch = remaining.match(/<\/([a-zA-Z][a-zA-Z0-9_-]*)>\s*(?:\n\s*(?:---+|\*\*\*+|___+)\s*)?$/);
+      if (trailingCloseTagMatch && trailingCloseTagMatch.index !== undefined) {
+        const tagName = trailingCloseTagMatch[1];
+        const openTagPattern = new RegExp(`<${escapeRegex(tagName)}(?:[\\s>/])`, "i");
+        let searchIndex = trailingCloseTagMatch.index;
+        let foundStartIndex = -1;
+        while (searchIndex >= 0) {
+          const prevOpen = remaining.lastIndexOf("<" + tagName, searchIndex);
+          if (prevOpen === -1) {
+            const sliceBefore = remaining.slice(0, searchIndex);
+            const matches = [...sliceBefore.matchAll(new RegExp(`<${escapeRegex(tagName)}(?:[\\s>/])`, "gi"))];
+            if (matches.length > 0) {
+              const lastM = matches[matches.length - 1];
+              if (lastM.index !== undefined) {
+                const balancedEnd2 = findBalancedClosingTag(remaining, lastM.index, tagName);
+                if (balancedEnd2 >= trailingCloseTagMatch.index) {
+                  foundStartIndex = lastM.index;
+                }
+              }
+            }
+            break;
           }
+          const balancedEnd = findBalancedClosingTag(remaining, prevOpen, tagName);
+          if (balancedEnd >= trailingCloseTagMatch.index) {
+            foundStartIndex = prevOpen;
+            break;
+          }
+          searchIndex = prevOpen - 1;
+        }
+        if (foundStartIndex !== -1) {
+          const beforeTag = remaining.slice(0, foundStartIndex);
+          const sepMatch = beforeTag.match(/(?:\n\s*(?:---+|\*\*\*+|___+)\s*\n\s*)$/);
+          const cutIndex = sepMatch ? beforeTag.length - sepMatch[0].length : foundStartIndex;
+          const trailingWidgetSegment = remaining.slice(cutIndex);
+          suffix = trailingWidgetSegment + suffix;
+          remaining = remaining.slice(0, cutIndex);
+          advancedSuffix = true;
+          continue;
         }
       }
     }
@@ -1391,6 +1521,24 @@ function extractAndProtectBlocks(text, options = {}) {
     let result = "";
     let i = 0;
     while (i < remaining.length) {
+      if (remaining.startsWith("```", i)) {
+        const endFence = remaining.indexOf("```", i + 3);
+        if (endFence !== -1) {
+          let blockEnd = endFence + 3;
+          if (remaining[blockEnd] === `
+`)
+            blockEnd++;
+          else if (remaining.slice(blockEnd, blockEnd + 2) === `\r
+`)
+            blockEnd += 2;
+          const rawBlock = remaining.slice(i, blockEnd);
+          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+          placeholders.set(placeholder, rawBlock);
+          result += placeholder;
+          i = blockEnd;
+          continue;
+        }
+      }
       if (remaining.startsWith("<!--", i)) {
         const end = remaining.indexOf("-->", i);
         if (end !== -1) {
@@ -1402,40 +1550,26 @@ function extractAndProtectBlocks(text, options = {}) {
           continue;
         }
       }
-      if (remaining.startsWith("<cyoa-block", i)) {
-        const end = remaining.indexOf("</cyoa-block>", i);
-        if (end !== -1) {
-          const rawBlock = remaining.slice(i, end + "</cyoa-block>".length);
-          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
-          placeholders.set(placeholder, rawBlock);
-          result += placeholder;
-          i = end + "</cyoa-block>".length;
-          continue;
-        }
-      }
-      const specialTagMatch = remaining.slice(i).match(/^<(style|script|svg|table|details)[\s>]/i);
-      if (specialTagMatch) {
-        const tagName = specialTagMatch[1].toLowerCase();
-        const closeTag = `</${tagName}>`;
-        const endIdx = remaining.toLowerCase().indexOf(closeTag, i);
-        if (endIdx !== -1) {
-          const rawBlock = remaining.slice(i, endIdx + closeTag.length);
-          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
-          placeholders.set(placeholder, rawBlock);
-          result += placeholder;
-          i = endIdx + closeTag.length;
-          continue;
-        }
-      }
-      if (/^<div[\s>]/i.test(remaining.slice(i))) {
-        const endIdx = findMatchingClosingTag(remaining, i, "div");
-        if (endIdx !== -1) {
-          const rawBlock = remaining.slice(i, endIdx);
-          const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
-          placeholders.set(placeholder, rawBlock);
-          result += placeholder;
-          i = endIdx;
-          continue;
+      if (remaining[i] === "<" && remaining[i + 1] !== "/" && remaining[i + 1] !== "!" && remaining[i + 1] !== "?") {
+        const header = scanTagHeader(remaining, i);
+        if (header && shouldProtectTag(header.tagName, header.fullHeader, header.isSelfClosing)) {
+          if (header.isSelfClosing) {
+            const rawBlock = remaining.slice(i, header.endIndex);
+            const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+            placeholders.set(placeholder, rawBlock);
+            result += placeholder;
+            i = header.endIndex;
+            continue;
+          }
+          const endIdx = findBalancedClosingTag(remaining, i, header.tagName);
+          if (endIdx !== -1) {
+            const rawBlock = remaining.slice(i, endIdx);
+            const placeholder = `${PLACEHOLDER_PREFIX}${blockCounter++}${PLACEHOLDER_SUFFIX}`;
+            placeholders.set(placeholder, rawBlock);
+            result += placeholder;
+            i = endIdx;
+            continue;
+          }
         }
       }
       result += remaining[i];
@@ -1453,19 +1587,38 @@ function extractAndProtectBlocks(text, options = {}) {
     totalProtectedCount
   };
 }
-function reinsertOmittedBlock(transformed, originalBody, placeholder, originalBlock) {
-  const origIndex = originalBody.indexOf(placeholder);
+function reinsertOmittedBlock(transformed, maskedBody, placeholder, originalBlock) {
+  const bareIdMatch = placeholder.match(/\d+/);
+  if (bareIdMatch) {
+    const id = bareIdMatch[0];
+    const mutationPattern = new RegExp(`(?:\\[\\[|\\[|<|\u27E6|\\()\\s*LR_PROTECT_${id}\\s*(?:\\]\\]|\\]|>|\u27E7|\\))`, "g");
+    if (mutationPattern.test(transformed)) {
+      return transformed.replace(mutationPattern, originalBlock);
+    }
+  }
+  const origIndex = maskedBody.indexOf(placeholder);
   if (origIndex !== -1) {
-    const preWindow = originalBody.slice(Math.max(0, origIndex - 40), origIndex).trim();
-    if (preWindow.length > 10) {
-      const foundIdx = transformed.indexOf(preWindow);
-      if (foundIdx !== -1) {
-        const insertPos = foundIdx + preWindow.length;
+    const preSlice = maskedBody.slice(Math.max(0, origIndex - 50), origIndex).trim();
+    if (preSlice.length >= 8) {
+      const anchorPos = transformed.indexOf(preSlice);
+      if (anchorPos !== -1) {
+        const insertPos = anchorPos + preSlice.length;
         return `${transformed.slice(0, insertPos)}
 
 ${originalBlock}
 
 ${transformed.slice(insertPos)}`;
+      }
+    }
+    const afterSlice = maskedBody.slice(origIndex + placeholder.length, Math.min(maskedBody.length, origIndex + placeholder.length + 50)).trim();
+    if (afterSlice.length >= 8) {
+      const anchorPos = transformed.indexOf(afterSlice);
+      if (anchorPos !== -1) {
+        return `${transformed.slice(0, anchorPos)}
+
+${originalBlock}
+
+${transformed.slice(anchorPos)}`;
       }
     }
   }
