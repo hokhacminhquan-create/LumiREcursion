@@ -1000,50 +1000,8 @@ async function resolveTurnCards(
           });
 
           if (diff) {
-            if (recastSettings.applyMode === 'replace') {
-              await sp.chat.updateMessage(
-                diff.chatId,
-                diff.messageId,
-                { content: diff.transformedText },
-                effectiveUserId
-              );
-              sp.toast?.success?.('✨ Recast post-processing applied in-place');
-              sp.sendToFrontend?.({
-                type: 'RECAST_APPLIED',
-                chatId: diff.chatId,
-                messageId: diff.messageId,
-                mode: 'replace'
-              });
-            } else if (recastSettings.applyMode === 'swipe') {
-              const allMsgs = await sp.chat.getMessages(diff.chatId);
-              const foundMsg = allMsgs.find((m: any) => m.id === diff.messageId);
-              const existingSwipes =
-                Array.isArray(foundMsg?.swipes) && foundMsg.swipes.length > 0
-                  ? foundMsg.swipes
-                  : [diff.originalText];
-              const newSwipes = [...existingSwipes, diff.transformedText];
-              const newSwipeId = newSwipes.length - 1;
-              await sp.chat.updateMessage(
-                diff.chatId,
-                diff.messageId,
-                {
-                  content: diff.transformedText,
-                  swipes: newSwipes,
-                  swipe_id: newSwipeId
-                },
-                effectiveUserId
-              );
-              sp.toast?.success?.('✨ Recast post-processing added as new swipe');
-              sp.sendToFrontend?.({
-                type: 'RECAST_APPLIED',
-                chatId: diff.chatId,
-                messageId: diff.messageId,
-                mode: 'swipe'
-              });
-            } else {
-              // 'diff' mode: show interactive comparison modal
-              sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
-            }
+            console.log('[Lumi:REcursion:Recast] Manual recast complete. Opening interactive Diff Review Modal.');
+            sp.sendToFrontend?.({ type: 'RECAST_DIFF_READY', diff });
           }
         } catch (err: any) {
           console.error('[Lumi:REcursion:Recast] Manual recast failed:', err);

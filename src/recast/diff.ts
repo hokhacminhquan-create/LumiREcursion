@@ -184,25 +184,26 @@ export function computeWordDiff(oldText: string, newText: string): { oldHtml: st
  * passNames: ["Pass1Name", "Pass2Name", ...]
  */
 export function buildSteps(snapshots: string[], passNames: string[]): RecastDiffStep[] {
-  if (!snapshots || snapshots.length < 2) return [];
+  if (!snapshots || snapshots.length === 0) return [];
 
+  const safeSnapshots = snapshots.length === 1 ? [snapshots[0], snapshots[0]] : snapshots;
   const getPassName = (i: number) => (passNames && passNames[i - 1] ? passNames[i - 1] : undefined);
   const steps: RecastDiffStep[] = [];
 
   // Step 0: full diff — original vs final
   steps.push({
-    oldText: snapshots[0],
-    newText: snapshots[snapshots.length - 1],
+    oldText: safeSnapshots[0],
+    newText: safeSnapshots[safeSnapshots.length - 1],
     oldLabel: 'Original',
     newLabel: 'Final Recast',
     caption: 'Full Pipeline Diff'
   });
 
   // Steps 1..N: incremental diffs between consecutive passes
-  for (let i = 0; i < snapshots.length - 1; i++) {
+  for (let i = 0; i < safeSnapshots.length - 1; i++) {
     steps.push({
-      oldText: snapshots[i],
-      newText: snapshots[i + 1],
+      oldText: safeSnapshots[i],
+      newText: safeSnapshots[i + 1],
       oldLabel: i === 0 ? 'Original' : `Pass ${i}`,
       newLabel: `Pass ${i + 1}`,
       caption: i === 0 ? 'Original → Pass 1' : `Pass ${i} → Pass ${i + 1}`,

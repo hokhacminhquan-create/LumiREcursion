@@ -17,6 +17,8 @@ export function closeRecastDiffModal() {
   const host = document.getElementById('recursion-modal-host');
   if (host) {
     host.classList.remove('active');
+    host.style.display = 'none';
+    host.style.pointerEvents = 'none';
   }
 }
 
@@ -27,9 +29,18 @@ export function showRecastDiffModal(diff: RecastDiffData, hostCtx: any) {
   if (!host) {
     host = document.createElement('div');
     host.id = 'recursion-modal-host';
-    document.body.appendChild(host);
+    if (document.body) {
+      document.body.appendChild(host);
+    } else if (document.documentElement) {
+      document.documentElement.appendChild(host);
+    }
   }
   host.classList.add('active');
+  host.style.display = 'flex';
+  host.style.pointerEvents = 'auto';
+  host.style.zIndex = '999999';
+
+  console.log('[Lumi:REcursion:Recast] Opening Recast Diff Review Modal for message:', diff.messageId);
 
   const backdrop = document.createElement('div');
   backdrop.id = 'recast_diff_backdrop';

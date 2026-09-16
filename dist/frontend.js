@@ -2268,21 +2268,22 @@ function computeWordDiff(oldText, newText) {
   return { oldHtml, newHtml };
 }
 function buildSteps(snapshots, passNames) {
-  if (!snapshots || snapshots.length < 2)
+  if (!snapshots || snapshots.length === 0)
     return [];
+  const safeSnapshots = snapshots.length === 1 ? [snapshots[0], snapshots[0]] : snapshots;
   const getPassName = (i) => passNames && passNames[i - 1] ? passNames[i - 1] : undefined;
   const steps = [];
   steps.push({
-    oldText: snapshots[0],
-    newText: snapshots[snapshots.length - 1],
+    oldText: safeSnapshots[0],
+    newText: safeSnapshots[safeSnapshots.length - 1],
     oldLabel: "Original",
     newLabel: "Final Recast",
     caption: "Full Pipeline Diff"
   });
-  for (let i = 0;i < snapshots.length - 1; i++) {
+  for (let i = 0;i < safeSnapshots.length - 1; i++) {
     steps.push({
-      oldText: snapshots[i],
-      newText: snapshots[i + 1],
+      oldText: safeSnapshots[i],
+      newText: safeSnapshots[i + 1],
       oldLabel: i === 0 ? "Original" : `Pass ${i}`,
       newLabel: `Pass ${i + 1}`,
       caption: i === 0 ? "Original → Pass 1" : `Pass ${i} → Pass ${i + 1}`,
@@ -2302,6 +2303,8 @@ function closeRecastDiffModal() {
   const host = document.getElementById("recursion-modal-host");
   if (host) {
     host.classList.remove("active");
+    host.style.display = "none";
+    host.style.pointerEvents = "none";
   }
 }
 function showRecastDiffModal(diff, hostCtx) {
@@ -2310,9 +2313,17 @@ function showRecastDiffModal(diff, hostCtx) {
   if (!host) {
     host = document.createElement("div");
     host.id = "recursion-modal-host";
-    document.body.appendChild(host);
+    if (document.body) {
+      document.body.appendChild(host);
+    } else if (document.documentElement) {
+      document.documentElement.appendChild(host);
+    }
   }
   host.classList.add("active");
+  host.style.display = "flex";
+  host.style.pointerEvents = "auto";
+  host.style.zIndex = "999999";
+  console.log("[Lumi:REcursion:Recast] Opening Recast Diff Review Modal for message:", diff.messageId);
   const backdrop = document.createElement("div");
   backdrop.id = "recast_diff_backdrop";
   activeBackdropEl = backdrop;
