@@ -4279,6 +4279,57 @@ function renderMainPanel(root) {
   };
   connRow.appendChild(connSelect);
   settingsBody.appendChild(connRow);
+  const modelRow = document.createElement("div");
+  modelRow.style.marginTop = "8px";
+  modelRow.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Model Override (Optional):</label>`;
+  const modelGroup = createModelOverrideInputGroup({
+    value: currentSettings.modelOverride || "",
+    placeholder: "Leave blank to use connection profile default...",
+    datalistId: "lr-reasoning-models-datalist",
+    getConnectionId: () => {
+      if (currentSettings?.connectionProfileId)
+        return currentSettings.connectionProfileId;
+      const def = availableConnections.find((c) => c.is_default) || availableConnections[0];
+      return def ? def.id : "";
+    },
+    getConnectionName: () => {
+      const connId = currentSettings?.connectionProfileId;
+      const target = connId ? availableConnections.find((c) => c.id === connId) : availableConnections.find((c) => c.is_default) || availableConnections[0];
+      return target?.name || "Default Connection";
+    },
+    onSave: (val) => {
+      currentSettings.modelOverride = val;
+      hostCtx?.sendToBackend({ type: "UPDATE_SETTINGS", settings: { modelOverride: val } });
+    },
+    hostCtx
+  });
+  modelRow.appendChild(modelGroup);
+  settingsBody.appendChild(modelRow);
+  const reasoningRow = document.createElement("div");
+  reasoningRow.style.marginTop = "8px";
+  reasoningRow.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Reasoning / Thinking Effort:</label>`;
+  const reasoningSelect = document.createElement("select");
+  reasoningSelect.className = "lr-select";
+  const reasoningOptions = [
+    { value: "off", label: "\uD83D\uDE80 Off (Fastest, Recommended for card evaluation)" },
+    { value: "low", label: "⚡ Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+    { value: "inherit", label: "Inherit Connection Profile Default" }
+  ];
+  for (const ro of reasoningOptions) {
+    const opt = document.createElement("option");
+    opt.value = ro.value;
+    opt.textContent = ro.label;
+    opt.selected = (currentSettings.reasoningEffort || "off") === ro.value;
+    reasoningSelect.appendChild(opt);
+  }
+  reasoningSelect.onchange = () => {
+    currentSettings.reasoningEffort = reasoningSelect.value;
+    hostCtx?.sendToBackend({ type: "UPDATE_SETTINGS", settings: { reasoningEffort: reasoningSelect.value } });
+  };
+  reasoningRow.appendChild(reasoningSelect);
+  settingsBody.appendChild(reasoningRow);
   const gridRow = document.createElement("div");
   gridRow.style.display = "grid";
   gridRow.style.gridTemplateColumns = "1fr 1fr";

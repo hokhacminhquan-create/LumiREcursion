@@ -477,6 +477,8 @@ var DEFAULT_SETTINGS = {
   worldBookId: "",
   promptFootprint: "normal",
   connectionProfileId: "",
+  modelOverride: "",
+  reasoningEffort: "off",
   storyForm: {
     tense: "auto",
     pov: "auto"
@@ -719,6 +721,8 @@ function extractJsonFromResponse(raw) {
   if (typeof raw === "object" && raw !== null && "content" in raw) {
     text = String(raw.content || "").trim();
   }
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  text = text.replace(/<thought>[\s\S]*?<\/thought>/gi, "").trim();
   text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   try {
     return JSON.parse(text);
@@ -2091,12 +2095,18 @@ async function listConnections(userId) {
   }
   return [];
 }
-async function resolveConnectionId(profileId, userId) {
-  if (profileId)
-    return profileId;
+async function resolveConnectionDetails(profileId, modelOverride, userId) {
   const conns = await listConnections(userId);
-  const def = conns.find((c) => c.is_default) || conns[0];
-  return def ? def.id : undefined;
+  let target = profileId ? conns.find((c) => c.id === profileId) : undefined;
+  if (!target) {
+    target = conns.find((c) => c.is_default) || conns[0];
+  }
+  const effectiveModel = modelOverride?.trim() || target?.model || undefined;
+  return {
+    connectionId: target?.id,
+    model: effectiveModel,
+    provider: target?.provider
+  };
 }
 async function getActiveCharacterId(userId) {
   try {
@@ -2295,7 +2305,11 @@ async function resolveTurnCards(context) {
     }
     const runId = `run-${Date.now()}`;
     const turnUserId = context?.userId || getEffectiveUserId(context?.chatId);
-    const connId = await resolveConnectionId(settings.connectionProfileId, turnUserId);
+    const connDetails = await resolveConnectionDetails(settings.connectionProfileId, settings.modelOverride, turnUserId);
+    const connId = connDetails.connectionId;
+    const effectiveModel = connDetails.model;
+    const reasoningEffort = settings.reasoningEffort || "off";
+    const reasoningParam = reasoningEffort === "off" ? { source: "off", apiReasoning: false } : reasoningEffort === "inherit" ? undefined : { effort: reasoningEffort };
     const initialPixels = selectedCards.map((c) => ({
       id: c.id,
       name: c.name,
@@ -2319,14 +2333,17 @@ async function resolveTurnCards(context) {
           const controller = new AbortController;
           const timeoutId = setTimeout(() => controller.abort(), settings.cardTimeoutSec * 1000);
           const combinedSignal = context?.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal;
-          const res = await sp.generate.raw({
+          const rawPayload = {
             type: "raw",
             messages: [{ role: "user", content: prompt }],
             connection_id: connId,
-            parameters: { temperature: 0.25, max_tokens: 280 },
+            parameters: { temperature: 0.25, max_tokens: 500 },
+            ...effectiveModel ? { model: effectiveModel } : {},
+            ...reasoningParam ? { reasoning: reasoningParam } : {},
             ...turnUserId ? { userId: turnUserId } : {},
             signal: combinedSignal
-          });
+          };
+          const res = await sp.generate.raw(rawPayload);
           clearTimeout(timeoutId);
           const parsed = extractJsonFromResponse(res?.content);
           const promptText = typeof parsed?.promptText === "string" && parsed.promptText.trim() ? parsed.promptText.trim() : `Maintain active scene awareness for ${card.name}.`;
@@ -2352,6 +2369,7 @@ async function resolveTurnCards(context) {
           });
           return cardResult;
         } catch (err) {
+          console.error(`[Lumi:REcursion] Error evaluating card "${card.name}":`, err);
           const cardResult = {
             cardId: card.id,
             family: card.builtinFamily || card.name,
@@ -2370,7 +2388,7 @@ async function resolveTurnCards(context) {
             pipeline: "segmented",
             phase: "running",
             pixels: [...initialPixels],
-            currentStepText: `Fallback for ${card.name}`
+            currentStepText: `Fallback for ${card.name}: ${err?.message || "timeout"}`
           });
           return cardResult;
         }
@@ -2382,14 +2400,17 @@ async function resolveTurnCards(context) {
         const controller = new AbortController;
         const timeoutId = setTimeout(() => controller.abort(), settings.cardTimeoutSec * 1500);
         const combinedSignal = context?.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal;
-        const res = await sp.generate.raw({
+        const rawPayload = {
           type: "raw",
           messages: [{ role: "user", content: prompt }],
           connection_id: connId,
-          parameters: { temperature: 0.25, max_tokens: 1200 },
+          parameters: { temperature: 0.25, max_tokens: 1500 },
+          ...effectiveModel ? { model: effectiveModel } : {},
+          ...reasoningParam ? { reasoning: reasoningParam } : {},
           ...turnUserId ? { userId: turnUserId } : {},
           signal: combinedSignal
-        });
+        };
+        const res = await sp.generate.raw(rawPayload);
         clearTimeout(timeoutId);
         const parsed = extractJsonFromResponse(res?.content);
         const bundleCards = Array.isArray(parsed?.cards) ? parsed.cards : [];

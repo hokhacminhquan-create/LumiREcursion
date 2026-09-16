@@ -25,7 +25,7 @@ import type {
 import { DEFAULT_DECK_ID } from './cards/defaults';
 import { DEFAULT_RECAST_SETTINGS } from './recast/defaults';
 import { RECAST_STYLES } from './recast/styles';
-import { renderRecastPanel } from './recast/recast-panel';
+import { renderRecastPanel, createModelOverrideInputGroup } from './recast/recast-panel';
 import { showRecastDiffModal } from './recast/diff-modal';
 import { renderWorldBookPanel, renderCharacterPayloadPanel } from './cards/source-panels';
 
@@ -1036,6 +1036,62 @@ function renderMainPanel(root: HTMLElement) {
   };
   connRow.appendChild(connSelect);
   settingsBody.appendChild(connRow);
+
+  // Model Override (Optional)
+  const modelRow = document.createElement('div');
+  modelRow.style.marginTop = '8px';
+  modelRow.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Model Override (Optional):</label>`;
+  const modelGroup = createModelOverrideInputGroup({
+    value: currentSettings.modelOverride || '',
+    placeholder: 'Leave blank to use connection profile default...',
+    datalistId: 'lr-reasoning-models-datalist',
+    getConnectionId: () => {
+      if (currentSettings?.connectionProfileId) return currentSettings.connectionProfileId;
+      const def = availableConnections.find((c) => c.is_default) || availableConnections[0];
+      return def ? def.id : '';
+    },
+    getConnectionName: () => {
+      const connId = currentSettings?.connectionProfileId;
+      const target = connId
+        ? availableConnections.find((c) => c.id === connId)
+        : availableConnections.find((c) => c.is_default) || availableConnections[0];
+      return target?.name || 'Default Connection';
+    },
+    onSave: (val) => {
+      currentSettings!.modelOverride = val;
+      hostCtx?.sendToBackend({ type: 'UPDATE_SETTINGS', settings: { modelOverride: val } });
+    },
+    hostCtx
+  });
+  modelRow.appendChild(modelGroup);
+  settingsBody.appendChild(modelRow);
+
+  // Reasoning / Thinking Effort
+  const reasoningRow = document.createElement('div');
+  reasoningRow.style.marginTop = '8px';
+  reasoningRow.innerHTML = `<label style="display:block;font-size:11px;color:#aaa;margin-bottom:4px;">Reasoning / Thinking Effort:</label>`;
+  const reasoningSelect = document.createElement('select');
+  reasoningSelect.className = 'lr-select';
+  const reasoningOptions: Array<{ value: string; label: string }> = [
+    { value: 'off', label: '🚀 Off (Fastest, Recommended for card evaluation)' },
+    { value: 'low', label: '⚡ Low' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'high', label: 'High' },
+    { value: 'inherit', label: 'Inherit Connection Profile Default' }
+  ];
+  for (const ro of reasoningOptions) {
+    const opt = document.createElement('option');
+    opt.value = ro.value;
+    opt.textContent = ro.label;
+    opt.selected = (currentSettings.reasoningEffort || 'off') === ro.value;
+    reasoningSelect.appendChild(opt);
+  }
+  reasoningSelect.onchange = () => {
+    currentSettings!.reasoningEffort = reasoningSelect.value as any;
+    hostCtx?.sendToBackend({ type: 'UPDATE_SETTINGS', settings: { reasoningEffort: reasoningSelect.value as any } });
+  };
+  reasoningRow.appendChild(reasoningSelect);
+  settingsBody.appendChild(reasoningRow);
 
   // Footprint and Story Form
   const gridRow = document.createElement('div');

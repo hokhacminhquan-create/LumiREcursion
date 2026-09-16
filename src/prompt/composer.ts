@@ -133,6 +133,10 @@ export function extractJsonFromResponse(raw: unknown): any {
     text = String((raw as any).content || '').trim();
   }
 
+  // Strip <think>...</think> and <thought>...</thought> reasoning blocks from thinking models
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+
   // Remove markdown code fences if present
   text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 

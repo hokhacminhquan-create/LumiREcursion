@@ -38,7 +38,7 @@ async function fetchConnectionModels(
   return result;
 }
 
-function createModelOverrideInputGroup(opts: {
+export function createModelOverrideInputGroup(opts: {
   value: string;
   placeholder: string;
   datalistId: string;

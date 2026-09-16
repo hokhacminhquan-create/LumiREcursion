@@ -15,6 +15,8 @@ export const DEFAULT_SETTINGS: RecursionSettings = {
   worldBookId: '',
   promptFootprint: 'normal',
   connectionProfileId: '',
+  modelOverride: '',
+  reasoningEffort: 'off',
   storyForm: {
     tense: 'auto',
     pov: 'auto'

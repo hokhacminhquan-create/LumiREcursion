@@ -154,11 +154,27 @@ async function listConnections(userId?: string): Promise<Array<{ id: string; nam
   return [];
 }
 
-async function resolveConnectionId(profileId: string, userId?: string): Promise<string | undefined> {
-  if (profileId) return profileId;
+async function resolveConnectionDetails(
+  profileId?: string,
+  modelOverride?: string,
+  userId?: string
+): Promise<{ connectionId?: string; model?: string; provider?: string }> {
   const conns = await listConnections(userId);
-  const def = conns.find((c) => c.is_default) || conns[0];
-  return def ? def.id : undefined;
+  let target = profileId ? conns.find((c) => c.id === profileId) : undefined;
+  if (!target) {
+    target = conns.find((c) => c.is_default) || conns[0];
+  }
+  const effectiveModel = modelOverride?.trim() || target?.model || undefined;
+  return {
+    connectionId: target?.id,
+    model: effectiveModel,
+    provider: target?.provider
+  };
+}
+
+async function resolveConnectionId(profileId: string, userId?: string): Promise<string | undefined> {
+  const details = await resolveConnectionDetails(profileId, undefined, userId);
+  return details.connectionId;
 }
 
 async function getActiveCharacterId(userId?: string): Promise<string | null> {
@@ -417,7 +433,22 @@ async function resolveTurnCards(
       // ── Execute Reasoning Pipeline ──
       const runId = `run-${Date.now()}`;
       const turnUserId = context?.userId || getEffectiveUserId(context?.chatId);
-      const connId = await resolveConnectionId(settings.connectionProfileId, turnUserId);
+      const connDetails = await resolveConnectionDetails(
+        settings.connectionProfileId,
+        settings.modelOverride,
+        turnUserId
+      );
+      const connId = connDetails.connectionId;
+      const effectiveModel = connDetails.model;
+
+      // Reasoning control: default to 'off' so card JSON extraction doesn't burn 10s thinking
+      const reasoningEffort = settings.reasoningEffort || 'off';
+      const reasoningParam =
+        reasoningEffort === 'off'
+          ? { source: 'off', apiReasoning: false }
+          : reasoningEffort === 'inherit'
+            ? undefined
+            : { effort: reasoningEffort };
 
       // Initialize pixel indicators to 'running' (cyan)
       const initialPixels: HeroPixelItem[] = selectedCards.map((c) => ({
@@ -451,14 +482,18 @@ async function resolveTurnCards(
               ? AbortSignal.any([context.signal, controller.signal])
               : controller.signal;
 
-            const res = (await sp.generate.raw({
+            const rawPayload: any = {
               type: 'raw',
               messages: [{ role: 'user', content: prompt }],
               connection_id: connId,
-              parameters: { temperature: 0.25, max_tokens: 280 },
+              parameters: { temperature: 0.25, max_tokens: 500 },
+              ...(effectiveModel ? { model: effectiveModel } : {}),
+              ...(reasoningParam ? { reasoning: reasoningParam } : {}),
               ...(turnUserId ? { userId: turnUserId } : {}),
               signal: combinedSignal
-            })) as { content?: string };
+            };
+
+            const res = (await sp.generate.raw(rawPayload)) as { content?: string };
 
             clearTimeout(timeoutId);
             const parsed = extractJsonFromResponse(res?.content);
@@ -496,6 +531,7 @@ async function resolveTurnCards(
 
             return cardResult;
           } catch (err: any) {
+            console.error(`[Lumi:REcursion] Error evaluating card "${card.name}":`, err);
             const cardResult: EvaluatedCard = {
               cardId: card.id,
               family: card.builtinFamily || card.name,
@@ -515,7 +551,7 @@ async function resolveTurnCards(
               pipeline: 'segmented',
               phase: 'running',
               pixels: [...initialPixels],
-              currentStepText: `Fallback for ${card.name}`
+              currentStepText: `Fallback for ${card.name}: ${err?.message || 'timeout'}`
             });
 
             return cardResult;
@@ -533,14 +569,18 @@ async function resolveTurnCards(
             ? AbortSignal.any([context.signal, controller.signal])
             : controller.signal;
 
-          const res = (await sp.generate.raw({
+          const rawPayload: any = {
             type: 'raw',
             messages: [{ role: 'user', content: prompt }],
             connection_id: connId,
-            parameters: { temperature: 0.25, max_tokens: 1200 },
+            parameters: { temperature: 0.25, max_tokens: 1500 },
+            ...(effectiveModel ? { model: effectiveModel } : {}),
+            ...(reasoningParam ? { reasoning: reasoningParam } : {}),
             ...(turnUserId ? { userId: turnUserId } : {}),
             signal: combinedSignal
-          })) as { content?: string };
+          };
+
+          const res = (await sp.generate.raw(rawPayload)) as { content?: string };
 
           clearTimeout(timeoutId);
           const parsed = extractJsonFromResponse(res?.content);

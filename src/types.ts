@@ -70,6 +70,8 @@ export interface RecursionSettings {
   worldBookId: string;
   promptFootprint: 'compact' | 'normal' | 'rich';
   connectionProfileId: string;
+  modelOverride?: string;
+  reasoningEffort?: 'inherit' | 'off' | 'low' | 'medium' | 'high';
   storyForm: StoryFormSettings;
   maxCards: number;
   contextWindow: number; // Number of recent chat messages to examine (default: 6)
