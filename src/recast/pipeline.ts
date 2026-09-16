@@ -6,6 +6,7 @@
 
 import type { RecastPass, RecastPreset, RecastSettings, RecastDiffData, RecastProgress } from './types';
 import { extractAndProtectBlocks, restoreProtectedBlocks, normalizeProtectionPlaceholders, type ProtectedContent } from './block-protection';
+import { splitIntoChunks, reassembleChunks, type TextChunk } from './chunking';
 
 function cleanModelOutput(text: string): string {
   if (!text) return '';
@@ -28,6 +29,10 @@ function cleanModelOutput(text: string): string {
   if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
     cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\n?/, '').replace(/\n?```$/, '').trim();
   }
+
+  // Strip conversational preambles (e.g. "Here is the rewritten narrative:")
+  cleaned = cleaned.replace(/^(?:Here (?:is|are) (?:the )?(?:rewritten|revised|edited|corrected|improved) (?:text|narrative|scene|prose|version)[^:\n]*:?\s*)+/i, '').trim();
+  cleaned = cleaned.replace(/^(?:Certainly!?|Sure!?),?\s*(?:here (?:is|are) (?:the )?(?:rewritten|revised|edited|corrected|improved) (?:text|narrative|scene|prose|version)[^:\n]*:?\s*)+/i, '').trim();
 
   return cleaned;
 }
@@ -54,6 +59,12 @@ export async function runSinglePass(
 
   const tStart = Date.now();
   let systemPrompt = pass.prompt || 'You are an expert prose editor. Rewrite the text to improve flow, voice, and pacing.\nReturn only the rewritten text.';
+
+  systemPrompt += `\n\n[CRITICAL CONTENT PRESERVATION & ANTI-TRUNCATION DIRECTIVES]
+1. COMPLETE NARRATIVE REQUIRED: You MUST output the ENTIRE narrative text from start to finish. Never summarize, condense, truncate, or abridge the text.
+2. FULL PROSE RETENTION: Retain all narration, environment descriptions, sensory details, character actions, internal monologue, and dialogue. Never output only dialogue lines, and never output only edited snippets.
+3. PRESERVE EVERY PARAGRAPH: Match the length, structure, and depth of the input narrative. Every scene and event must remain intact.
+4. TARGET ONLY AI-SLOP & STYLE: Focus your edits strictly on eliminating robotic phrasing, awkward repetition, and unnatural dialogue quirks while keeping 100% of the story substance.`;
 
   if (protectedData && protectedData.placeholders.size > 0) {
     systemPrompt += `\n\n[CRITICAL PRESERVATION NOTICE: The text contains preserved block tokens formatted as ⟦LR_PROTECT_N⟧ representing intact UI cards and embedded structures. You MUST keep all ⟦LR_PROTECT_N⟧ tokens verbatim in their original positions without deleting, altering, or translating them.]`;
@@ -218,13 +229,14 @@ export async function runSinglePass(
 
   // Max tokens & temperature (dynamically scale to prevent mid-story truncation for long text)
   const estimatedInputTokens = Math.ceil(textToTransform.length / 3.5);
-  const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 2048;
-  const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.3)));
+  const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 4096;
+  const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.5)));
   const temperature = pass.temperature ?? 0.3;
 
-  // Timeouts
+  // Timeouts (dynamically scale pass duration for long narrative chunks)
   const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 20;
-  const passTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 60;
+  const basePassTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 90;
+  const effectivePassTimeoutSec = Math.max(basePassTimeoutSec, Math.ceil(estimatedInputTokens * 0.1) + 45);
 
   const abortController = new AbortController();
   let hasReceivedFirstToken = false;
@@ -241,10 +253,10 @@ export async function runSinglePass(
     }, ttftTimeoutSec * 1000);
   }
 
-  if (passTimeoutSec > 0) {
+  if (effectivePassTimeoutSec > 0) {
     passTimer = setTimeout(() => {
-      abortController.abort(new Error(`Pass timeout: exceeded ${passTimeoutSec}s total duration.`));
-    }, passTimeoutSec * 1000);
+      abortController.abort(new Error(`Pass timeout: exceeded ${effectivePassTimeoutSec}s total duration.`));
+    }, effectivePassTimeoutSec * 1000);
   }
 
   const genPayload: any = {
@@ -394,72 +406,129 @@ export async function runRecastPipeline(
   const passNames: string[] = [];
   const errors: Array<{ passName: string; error: string }> = [];
 
+  let successfulPasses = 0;
+
   for (let i = 0; i < enabledPasses.length; i++) {
     const pass = enabledPasses[i];
     passNames.push(pass.name);
 
-    onProgress?.({
-      active: true,
-      currentPassIndex: i + 1,
-      totalPasses: enabledPasses.length,
-      currentPassName: pass.name,
-      statusText: `Connecting pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`,
-      phase: 'connecting',
-      elapsedSec: (Date.now() - tStart) / 1000,
-      thoughtTokens: 0,
-      wordCount: 0,
-      streamPreview: ''
-    });
+    // 1. Split current text into scene/paragraph chunks if text is long (> ~7.5k chars)
+    const chunks = splitIntoChunks(currentText, 6000);
+    const isMultiChunk = chunks.length > 1;
 
-    try {
-      const passOutput = await runSinglePass(
-        sp,
-        pass,
-        currentText,
-        chatId,
-        messageId,
-        userId,
-        settings,
-        defaultConnectionId,
-        (streamInfo) => {
-          const totalElapsed = (Date.now() - tStart) / 1000;
-          let statusDesc = `[${streamInfo.elapsedSec.toFixed(1)}s] `;
-          if (streamInfo.phase === 'thinking') {
-            statusDesc += `Thinking (💭 ${streamInfo.thoughtTokens} tokens)...`;
-          } else if (streamInfo.phase === 'generating') {
-            statusDesc += `Generating prose (📝 ${streamInfo.wordCount} words)...`;
-          } else {
-            statusDesc += `Connecting to provider...`;
-          }
-
-          onProgress?.({
-            active: true,
-            currentPassIndex: i + 1,
-            totalPasses: enabledPasses.length,
-            currentPassName: pass.name,
-            statusText: statusDesc,
-            phase: streamInfo.phase,
-            elapsedSec: totalElapsed,
-            thoughtTokens: streamInfo.thoughtTokens,
-            wordCount: streamInfo.wordCount,
-            streamPreview: streamInfo.streamPreview
-          });
-        },
-        protectedData
+    if (isMultiChunk) {
+      console.log(
+        `[Lumi:REcursion:Recast] Pass "${pass.name}": text length ${currentText.length} split into ${chunks.length} scene chunks.`
       );
-
-      currentText = normalizeProtectionPlaceholders(passOutput, protectedData.placeholders);
-      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
-    } catch (err: any) {
-      console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
-      const errMsg = err?.message || String(err);
-      errors.push({ passName: pass.name, error: errMsg });
-      sp?.toast?.error?.(`Pass "${pass.name}" failed: ${errMsg}`);
-      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
     }
+
+    const processedChunks: TextChunk[] = [];
+    let passHasValidChunks = false;
+
+    for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+      const chunk = chunks[cIdx];
+      const chunkPassDisplayName = isMultiChunk
+        ? `${pass.name} [Scene ${cIdx + 1}/${chunks.length}]`
+        : pass.name;
+
+      onProgress?.({
+        active: true,
+        currentPassIndex: i + 1,
+        totalPasses: enabledPasses.length,
+        currentPassName: chunkPassDisplayName,
+        statusText: isMultiChunk
+          ? `Pass ${i + 1}/${enabledPasses.length} • Scene ${cIdx + 1}/${chunks.length}: Connecting...`
+          : `Connecting pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`,
+        phase: 'connecting',
+        elapsedSec: (Date.now() - tStart) / 1000,
+        thoughtTokens: 0,
+        wordCount: 0,
+        streamPreview: ''
+      });
+
+      try {
+        let chunkOutput = await runSinglePass(
+          sp,
+          pass,
+          chunk.text,
+          chatId,
+          messageId,
+          userId,
+          settings,
+          defaultConnectionId,
+          (streamInfo) => {
+            const totalElapsed = (Date.now() - tStart) / 1000;
+            let statusDesc = `[${streamInfo.elapsedSec.toFixed(1)}s] `;
+            if (streamInfo.phase === 'thinking') {
+              statusDesc += `Thinking (💭 ${streamInfo.thoughtTokens} tokens)...`;
+            } else if (streamInfo.phase === 'generating') {
+              statusDesc += `Generating prose (📝 ${streamInfo.wordCount} words)...`;
+            } else {
+              statusDesc += `Connecting to provider...`;
+            }
+
+            onProgress?.({
+              active: true,
+              currentPassIndex: i + 1,
+              totalPasses: enabledPasses.length,
+              currentPassName: chunkPassDisplayName,
+              statusText: isMultiChunk
+                ? `Pass ${i + 1}/${enabledPasses.length} • Scene ${cIdx + 1}/${chunks.length}: ${statusDesc}`
+                : statusDesc,
+              phase: streamInfo.phase,
+              elapsedSec: totalElapsed,
+              thoughtTokens: streamInfo.thoughtTokens,
+              wordCount: streamInfo.wordCount,
+              streamPreview: streamInfo.streamPreview
+            });
+          },
+          protectedData
+        );
+
+        // TRUNCATION GUARD:
+        // If the LLM returned a severely collapsed output (< 45% of original chunk length),
+        // reject the truncated output and retain original chunk text so story is NEVER lost.
+        const minAcceptableLength = Math.floor(chunk.text.length * 0.45);
+        if (chunk.text.length > 300 && chunkOutput.length < minAcceptableLength) {
+          console.warn(
+            `[Lumi:REcursion:Recast] Truncation Guard triggered in pass "${pass.name}" chunk ${cIdx + 1}/${chunks.length}: ` +
+            `Output length (${chunkOutput.length}) was < 45% of input length (${chunk.text.length}). Reverting to original chunk.`
+          );
+          sp?.toast?.warning?.(
+            `[Recast] Pass "${pass.name}" attempted to condense Scene ${cIdx + 1}. Story content was preserved.`
+          );
+          chunkOutput = chunk.text;
+        }
+
+        processedChunks.push({
+          text: chunkOutput,
+          divider: chunk.divider
+        });
+        passHasValidChunks = true;
+      } catch (err: any) {
+        console.error(
+          `[Lumi:REcursion:Recast] Error executing chunk ${cIdx + 1}/${chunks.length} of pass "${pass.name}":`,
+          err
+        );
+        const errMsg = err?.message || String(err);
+        errors.push({ passName: `${pass.name} (Scene ${cIdx + 1})`, error: errMsg });
+        sp?.toast?.error?.(`Pass "${pass.name}" (Scene ${cIdx + 1}) failed: ${errMsg}`);
+        // Retain original chunk text on error to guarantee zero story loss
+        processedChunks.push(chunk);
+      }
+    }
+
+    if (passHasValidChunks) {
+      successfulPasses++;
+    }
+
+    // Reassemble all processed chunks back into coherent full text
+    currentText = reassembleChunks(processedChunks);
+    currentText = normalizeProtectionPlaceholders(currentText, protectedData.placeholders);
+    snapshots.push(restoreProtectedBlocks(currentText, protectedData));
   }
 
-  if (errors.length > 0 && errors.length === enabledPasses.length) {
+  if (successfulPasses === 0 && errors.length > 0) {
     throw new Error(
       `All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join('; ')}`
     );

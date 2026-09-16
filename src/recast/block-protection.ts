@@ -258,9 +258,9 @@ export function extractAndProtectBlocks(
         }
       }
 
-      // Leading horizontal rules immediately following comments (e.g. --- or ***)
+      // Leading horizontal rules (e.g. --- or ***)
       const hrMatch = remaining.match(/^(\s*(?:---+|\*\*\*+|___+)\s*\n+)/);
-      if (hrMatch && prefix.length > 0) {
+      if (hrMatch) {
         prefix += hrMatch[0];
         remaining = remaining.slice(hrMatch[0].length);
         advanced = true;

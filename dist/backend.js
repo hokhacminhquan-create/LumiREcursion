@@ -330,20 +330,22 @@ var PASS_GROUNDING = {
   name: "\u26D3\uFE0F Grounding",
   enabled: false,
   contextLength: 3,
-  prompt: `You are a prose editor. Edit <text_to_transform> so it feels rooted in the story's world, consistent with its rules, tone, setting, and the way things work there. Making it feels like it belongs to this specific world. Do not make slop or guesswork.
-Essentially make the text make sense, apply crude logic and reactions from the world, scene and characters.
-You don't have context about the scene, keep that in mind.
+  prompt: `You are a narrative grounding editor. Edit <text_to_transform> so it feels tactile, physically consistent, and rooted in the story's world rules, setting, and tone.
 
-When a character announces an action and then immediately executes it or time passes, add one short beat between the two so the reader doesn't feel like they blinked and missed the transition. It can be a reaction, a half-second, anything that confirms time moved.
+[CRITICAL]: You MUST output the ENTIRE narrative text from start to finish. Retain all scenes, prose paragraphs, thoughts, and dialogue intact. Never summarize, condense, or abridge. Every paragraph and scene must remain present.
 
-Return only the rewritten text. No explanations, no notes, no commentary.`,
+- Anchor abstract statements into concrete sensory details and physical reactions.
+- When a character announces an action or time passes, ensure the transition feels earned rather than skipped.
+- Fix glaring logical inconsistencies without altering character intent or the plot progression.
+
+Return only the complete grounded narrative. No explanations, no notes, no commentary.`,
   connection: "",
   modelOverride: "",
   reasoningEffort: "off",
-  maxTokens: 1000,
+  maxTokens: 4096,
   temperature: 0.3,
   ttftTimeoutSec: 20,
-  passTimeoutSec: 60,
+  passTimeoutSec: 90,
   injectWorldInfo: true,
   includeCharCard: true,
   includeSceneContext: true
@@ -353,10 +355,13 @@ var PASS_VALIDATOR = {
   name: "\u2705 Character Behavior Validator",
   enabled: true,
   contextLength: 7,
-  prompt: `You are a character consistency editor. Your only job is to fix dialog and actions that are not in character in <text_to_transform>. Do not improve prose. Do not fix grammar. Do not restructure sentences. Keep in mind you may not have received the whole scene context.
+  prompt: `You are a character consistency editor. Your job is to refine dialog, actions, and character mannerisms in <text_to_transform> to stay authentic to the character.
+
+[CRITICAL]: You MUST return the COMPLETE narrative from beginning to end with your character adjustments seamlessly integrated into the surrounding prose. Do NOT strip narration, environment descriptions, thoughts, or actions. Do NOT output only dialogue or an abridged version. Every paragraph from the input must be present in full detail.
+
 Priority order for character signals: example dialogue > personality traits > general description > scene context.
 
-Fix text if it:
+Adjust text if it:
 - Uses phrasing that contradicts the example dialogue voice
 - Has the character act warmer, cooler, more helpful, or more dramatic than the card defines
 - Responds only to the surface of what was said, ignoring what the other character is visibly feeling
@@ -369,51 +374,43 @@ Also following are behaviors from characters that should be modified or removed 
 - Stiff unexpected behavior from characters. Characters should not stop and ask things if it doesn't fit them or the context.
 </banned_behaviors>
 
-Return only the corrected text. No explanations, no commentary.`,
+Return only the complete narrative with character adjustments applied. No explanations, no commentary.`,
   connection: "",
   modelOverride: "",
   reasoningEffort: "off",
-  maxTokens: 1000,
+  maxTokens: 4096,
   temperature: 0.3,
   ttftTimeoutSec: 20,
-  passTimeoutSec: 60,
+  passTimeoutSec: 90,
   injectWorldInfo: false,
   includeCharCard: true,
   includeSceneContext: true
 };
 var PASS_PROSE = {
   id: "pass_prose",
-  name: "\u2712\uFE0F Prose Rhythm",
+  name: "\u2712\uFE0F Prose Rhythm & Anti-Slop",
   enabled: true,
   contextLength: 13,
-  prompt: `You are a prose editor. Your only job is to improve how <text_to_transform> reads without changing what it says.
+  prompt: `You are a prose stylist and editor. Your job is to polish <text_to_transform> to eliminate AI-slop, repetitive phrasing, and awkward rhythm without changing what happens.
+
+[CRITICAL]: You MUST return the COMPLETE narrative from start to finish. Keep every scene, paragraph, description, action, and line of dialogue. Never summarize, abridge, or cut scenes short.
+
 Rules:
-- Do not change any dialogue. Not a single word.
-- Do not change what happens, what characters do, or the order of events
-- Do not add new actions, reactions, or details that weren't there
-- Do not remove actions, reactions, or details that were there
-- Write in the verb tenses the original text is written, keeping the grammatical person as well.
-- Prioritize avoiding repetition of descriptive words by changing the phrase or removing it altogether
+- Do not change the meaning or essence of dialogue. Preserve all dialogue styling and speaker tags.
+- Do not cut actions, reactions, or narrative events.
+- Write in the verb tenses and grammatical person of the original text.
+- Eliminate repetitive AI sentence openers (e.g., consecutive sentences starting with 'He watched...', 'She could feel...').
+- Cut filler clich\xE9s, robotic redundancy, and purple-prose bloat while maintaining full narrative depth and sensory detail.
+- Enhance cadence and flow: vary sentence lengths between punchy and descriptive.
 
-What you may change:
-- Sentence length variation, break up monotonous rhythm, mix short and long
-- Eliminate repeated sentence structures, especially consecutive sentences starting the same way
-- Convert telling to showing, remove emotion labels and replace with physical behavior or action
-- Cut filler phrases that carry no meaning
-- Tighten overly wordy constructions without losing meaning
-- Favor flowing sentences connected by conjunctions over short stopped ones
-- Remove any unnecessary 'waiting' at the end of the dialog, if that wait is already clear by the text or cannot be implemented naturally with something else, then remove it
-
-Use the scene context only to match the established prose tone and style of the exchange. Do not drift from the register already set.
-
-Return only the rewritten text. No explanations, no notes, no commentary.`,
+Return only the complete, polished narrative. No explanations, no notes, no commentary.`,
   connection: "",
   modelOverride: "",
   reasoningEffort: "off",
-  maxTokens: 1000,
+  maxTokens: 4096,
   temperature: 0.3,
   ttftTimeoutSec: 20,
-  passTimeoutSec: 60,
+  passTimeoutSec: 90,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -423,21 +420,18 @@ var PASS_REPETITION_HAMMER = {
   name: "\uD83D\uDD28 Repetition Hammer",
   enabled: false,
   contextLength: 35,
-  prompt: `Simply edit <text_to_transform> and remove all repeated words or dialogs from it.
+  prompt: `You are a repetition editor. Your task is to eliminate awkward, immediate verbatim repetitions of words or phrases within <text_to_transform>.
 
-Rules:
-- Remove only words that are removable
-- Change only if allows the text to still make sense
-- Prioritize removing things seen in the more recent interactions
+[CRITICAL]: You MUST preserve the full narrative in its entirety. Retain every paragraph, scene, and action. Do NOT aggressively strip dialogue or prose. Only vary or prune redundant verbatim phrases that occur within close proximity.
 
-Return only the rewritten text. No explanations, no notes, no commentary. Think only once to avoid overthinking.`,
+Return only the complete narrative with repetitions resolved. No explanations, no notes, no commentary.`,
   connection: "",
   modelOverride: "",
   reasoningEffort: "off",
-  maxTokens: 1000,
+  maxTokens: 4096,
   temperature: 0.3,
   ttftTimeoutSec: 20,
-  passTimeoutSec: 60,
+  passTimeoutSec: 90,
   injectWorldInfo: false,
   includeCharCard: false,
   includeSceneContext: true
@@ -463,8 +457,8 @@ var DEFAULT_RECAST_SETTINGS = {
   defaultModelOverride: "",
   defaultReasoningEffort: "off",
   defaultTtftTimeoutSec: 20,
-  defaultPassTimeoutSec: 60,
-  maxTokens: 1000,
+  defaultPassTimeoutSec: 90,
+  maxTokens: 4096,
   protectTagsAndHtml: true
 };
 
@@ -1425,7 +1419,7 @@ function extractAndProtectBlocks(text, options = {}) {
         }
       }
       const hrMatch = remaining.match(/^(\s*(?:---+|\*\*\*+|___+)\s*\n+)/);
-      if (hrMatch && prefix.length > 0) {
+      if (hrMatch) {
         prefix += hrMatch[0];
         remaining = remaining.slice(hrMatch[0].length);
         advanced = true;
@@ -1639,6 +1633,96 @@ ${originalBlock}`;
   return `${protectedData.prefix}${result}${protectedData.suffix}`;
 }
 
+// src/recast/chunking.ts
+function splitByParagraphs(text, targetChars = 6000) {
+  const paragraphs = text.split(/\n\n+/);
+  if (paragraphs.length <= 1) {
+    return [{ text, divider: "" }];
+  }
+  const chunks = [];
+  let current = [];
+  let curLen = 0;
+  for (let i = 0;i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+    if (curLen + p.length > targetChars && current.length > 0) {
+      chunks.push({ text: current.join(`
+
+`), divider: `
+
+` });
+      current = [p];
+      curLen = p.length;
+    } else {
+      current.push(p);
+      curLen += p.length + 2;
+    }
+  }
+  if (current.length > 0) {
+    chunks.push({ text: current.join(`
+
+`), divider: "" });
+  }
+  return chunks;
+}
+function splitIntoChunks(text, targetChars = 6000) {
+  if (!text || text.length <= targetChars * 1.3) {
+    return [{ text, divider: "" }];
+  }
+  const hrRegex = /\n\s*(?:---+|\*\*\*+|___+)\s*\n/g;
+  const hrSplits = [];
+  let m;
+  while ((m = hrRegex.exec(text)) !== null) {
+    hrSplits.push({ index: m.index, length: m[0].length, match: m[0] });
+  }
+  if (hrSplits.length > 0) {
+    const rawSceneChunks = [];
+    let lastIndex = 0;
+    for (let i = 0;i < hrSplits.length; i++) {
+      const split = hrSplits[i];
+      const segment = text.slice(lastIndex, split.index);
+      if (segment.trim().length > 0) {
+        rawSceneChunks.push({ text: segment, divider: split.match });
+      }
+      lastIndex = split.index + split.length;
+    }
+    const finalSegment = text.slice(lastIndex);
+    if (finalSegment.trim().length > 0) {
+      rawSceneChunks.push({ text: finalSegment, divider: "" });
+    }
+    const refinedChunks = [];
+    for (const chunk of rawSceneChunks) {
+      if (chunk.text.length > targetChars * 1.8) {
+        const subChunks = splitByParagraphs(chunk.text, targetChars);
+        for (let s = 0;s < subChunks.length; s++) {
+          const isLastSub = s === subChunks.length - 1;
+          refinedChunks.push({
+            text: subChunks[s].text,
+            divider: isLastSub ? chunk.divider : subChunks[s].divider
+          });
+        }
+      } else {
+        refinedChunks.push(chunk);
+      }
+    }
+    return refinedChunks;
+  }
+  return splitByParagraphs(text, targetChars);
+}
+function reassembleChunks(chunks) {
+  if (!chunks || chunks.length === 0)
+    return "";
+  let result = "";
+  for (let i = 0;i < chunks.length; i++) {
+    result += chunks[i].text;
+    if (i < chunks.length - 1) {
+      result += chunks[i].divider || `
+
+`;
+    }
+  }
+  return result;
+}
+
 // src/recast/pipeline.ts
 function cleanModelOutput(text) {
   if (!text)
@@ -1655,6 +1739,8 @@ function cleanModelOutput(text) {
   if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
     cleaned = cleaned.replace(/^```[a-zA-Z0-9_-]*\n?/, "").replace(/\n?```$/, "").trim();
   }
+  cleaned = cleaned.replace(/^(?:Here (?:is|are) (?:the )?(?:rewritten|revised|edited|corrected|improved) (?:text|narrative|scene|prose|version)[^:\n]*:?\s*)+/i, "").trim();
+  cleaned = cleaned.replace(/^(?:Certainly!?|Sure!?),?\s*(?:here (?:is|are) (?:the )?(?:rewritten|revised|edited|corrected|improved) (?:text|narrative|scene|prose|version)[^:\n]*:?\s*)+/i, "").trim();
   return cleaned;
 }
 async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId, userId, settings, defaultConnectionId, onStreamUpdate, protectedData) {
@@ -1663,6 +1749,13 @@ async function runSinglePass(sp, pass, textToTransform, chatId, targetMessageId,
   const tStart = Date.now();
   let systemPrompt = pass.prompt || `You are an expert prose editor. Rewrite the text to improve flow, voice, and pacing.
 Return only the rewritten text.`;
+  systemPrompt += `
+
+[CRITICAL CONTENT PRESERVATION & ANTI-TRUNCATION DIRECTIVES]
+1. COMPLETE NARRATIVE REQUIRED: You MUST output the ENTIRE narrative text from start to finish. Never summarize, condense, truncate, or abridge the text.
+2. FULL PROSE RETENTION: Retain all narration, environment descriptions, sensory details, character actions, internal monologue, and dialogue. Never output only dialogue lines, and never output only edited snippets.
+3. PRESERVE EVERY PARAGRAPH: Match the length, structure, and depth of the input narrative. Every scene and event must remain intact.
+4. TARGET ONLY AI-SLOP & STYLE: Focus your edits strictly on eliminating robotic phrasing, awkward repetition, and unnatural dialogue quirks while keeping 100% of the story substance.`;
   if (protectedData && protectedData.placeholders.size > 0) {
     systemPrompt += `
 
@@ -1818,11 +1911,12 @@ ${textToTransform}
     reasoningParam = { source: "custom", apiReasoning: true, effort: effectiveReasoning };
   }
   const estimatedInputTokens = Math.ceil(textToTransform.length / 3.5);
-  const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 2048;
-  const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.3)));
+  const baseMaxTokens = pass.maxTokens ?? settings?.maxTokens ?? 4096;
+  const effectiveMaxTokens = Math.max(baseMaxTokens, Math.min(16384, Math.ceil(estimatedInputTokens * 1.5)));
   const temperature = pass.temperature ?? 0.3;
   const ttftTimeoutSec = pass.ttftTimeoutSec ?? settings?.defaultTtftTimeoutSec ?? 20;
-  const passTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 60;
+  const basePassTimeoutSec = pass.passTimeoutSec ?? settings?.defaultPassTimeoutSec ?? 90;
+  const effectivePassTimeoutSec = Math.max(basePassTimeoutSec, Math.ceil(estimatedInputTokens * 0.1) + 45);
   const abortController = new AbortController;
   let hasReceivedFirstToken = false;
   let ttftTimer = null;
@@ -1834,10 +1928,10 @@ ${textToTransform}
       }
     }, ttftTimeoutSec * 1000);
   }
-  if (passTimeoutSec > 0) {
+  if (effectivePassTimeoutSec > 0) {
     passTimer = setTimeout(() => {
-      abortController.abort(new Error(`Pass timeout: exceeded ${passTimeoutSec}s total duration.`));
-    }, passTimeoutSec * 1000);
+      abortController.abort(new Error(`Pass timeout: exceeded ${effectivePassTimeoutSec}s total duration.`));
+    }, effectivePassTimeoutSec * 1000);
   }
   const genPayload = {
     type: "raw",
@@ -1953,56 +2047,83 @@ async function runRecastPipeline(sp, options) {
   const snapshots = [rawText];
   const passNames = [];
   const errors = [];
+  let successfulPasses = 0;
   for (let i = 0;i < enabledPasses.length; i++) {
     const pass = enabledPasses[i];
     passNames.push(pass.name);
-    onProgress?.({
-      active: true,
-      currentPassIndex: i + 1,
-      totalPasses: enabledPasses.length,
-      currentPassName: pass.name,
-      statusText: `Connecting pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`,
-      phase: "connecting",
-      elapsedSec: (Date.now() - tStart) / 1000,
-      thoughtTokens: 0,
-      wordCount: 0,
-      streamPreview: ""
-    });
-    try {
-      const passOutput = await runSinglePass(sp, pass, currentText, chatId, messageId, userId, settings, defaultConnectionId, (streamInfo) => {
-        const totalElapsed = (Date.now() - tStart) / 1000;
-        let statusDesc = `[${streamInfo.elapsedSec.toFixed(1)}s] `;
-        if (streamInfo.phase === "thinking") {
-          statusDesc += `Thinking (\uD83D\uDCAD ${streamInfo.thoughtTokens} tokens)...`;
-        } else if (streamInfo.phase === "generating") {
-          statusDesc += `Generating prose (\uD83D\uDCDD ${streamInfo.wordCount} words)...`;
-        } else {
-          statusDesc += `Connecting to provider...`;
-        }
-        onProgress?.({
-          active: true,
-          currentPassIndex: i + 1,
-          totalPasses: enabledPasses.length,
-          currentPassName: pass.name,
-          statusText: statusDesc,
-          phase: streamInfo.phase,
-          elapsedSec: totalElapsed,
-          thoughtTokens: streamInfo.thoughtTokens,
-          wordCount: streamInfo.wordCount,
-          streamPreview: streamInfo.streamPreview
-        });
-      }, protectedData);
-      currentText = normalizeProtectionPlaceholders(passOutput, protectedData.placeholders);
-      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
-    } catch (err) {
-      console.error(`[Lumi:REcursion:Recast] Error executing pass "${pass.name}":`, err);
-      const errMsg = err?.message || String(err);
-      errors.push({ passName: pass.name, error: errMsg });
-      sp?.toast?.error?.(`Pass "${pass.name}" failed: ${errMsg}`);
-      snapshots.push(restoreProtectedBlocks(currentText, protectedData));
+    const chunks = splitIntoChunks(currentText, 6000);
+    const isMultiChunk = chunks.length > 1;
+    if (isMultiChunk) {
+      console.log(`[Lumi:REcursion:Recast] Pass "${pass.name}": text length ${currentText.length} split into ${chunks.length} scene chunks.`);
     }
+    const processedChunks = [];
+    let passHasValidChunks = false;
+    for (let cIdx = 0;cIdx < chunks.length; cIdx++) {
+      const chunk = chunks[cIdx];
+      const chunkPassDisplayName = isMultiChunk ? `${pass.name} [Scene ${cIdx + 1}/${chunks.length}]` : pass.name;
+      onProgress?.({
+        active: true,
+        currentPassIndex: i + 1,
+        totalPasses: enabledPasses.length,
+        currentPassName: chunkPassDisplayName,
+        statusText: isMultiChunk ? `Pass ${i + 1}/${enabledPasses.length} \u2022 Scene ${cIdx + 1}/${chunks.length}: Connecting...` : `Connecting pass ${i + 1}/${enabledPasses.length}: ${pass.name}...`,
+        phase: "connecting",
+        elapsedSec: (Date.now() - tStart) / 1000,
+        thoughtTokens: 0,
+        wordCount: 0,
+        streamPreview: ""
+      });
+      try {
+        let chunkOutput = await runSinglePass(sp, pass, chunk.text, chatId, messageId, userId, settings, defaultConnectionId, (streamInfo) => {
+          const totalElapsed = (Date.now() - tStart) / 1000;
+          let statusDesc = `[${streamInfo.elapsedSec.toFixed(1)}s] `;
+          if (streamInfo.phase === "thinking") {
+            statusDesc += `Thinking (\uD83D\uDCAD ${streamInfo.thoughtTokens} tokens)...`;
+          } else if (streamInfo.phase === "generating") {
+            statusDesc += `Generating prose (\uD83D\uDCDD ${streamInfo.wordCount} words)...`;
+          } else {
+            statusDesc += `Connecting to provider...`;
+          }
+          onProgress?.({
+            active: true,
+            currentPassIndex: i + 1,
+            totalPasses: enabledPasses.length,
+            currentPassName: chunkPassDisplayName,
+            statusText: isMultiChunk ? `Pass ${i + 1}/${enabledPasses.length} \u2022 Scene ${cIdx + 1}/${chunks.length}: ${statusDesc}` : statusDesc,
+            phase: streamInfo.phase,
+            elapsedSec: totalElapsed,
+            thoughtTokens: streamInfo.thoughtTokens,
+            wordCount: streamInfo.wordCount,
+            streamPreview: streamInfo.streamPreview
+          });
+        }, protectedData);
+        const minAcceptableLength = Math.floor(chunk.text.length * 0.45);
+        if (chunk.text.length > 300 && chunkOutput.length < minAcceptableLength) {
+          console.warn(`[Lumi:REcursion:Recast] Truncation Guard triggered in pass "${pass.name}" chunk ${cIdx + 1}/${chunks.length}: ` + `Output length (${chunkOutput.length}) was < 45% of input length (${chunk.text.length}). Reverting to original chunk.`);
+          sp?.toast?.warning?.(`[Recast] Pass "${pass.name}" attempted to condense Scene ${cIdx + 1}. Story content was preserved.`);
+          chunkOutput = chunk.text;
+        }
+        processedChunks.push({
+          text: chunkOutput,
+          divider: chunk.divider
+        });
+        passHasValidChunks = true;
+      } catch (err) {
+        console.error(`[Lumi:REcursion:Recast] Error executing chunk ${cIdx + 1}/${chunks.length} of pass "${pass.name}":`, err);
+        const errMsg = err?.message || String(err);
+        errors.push({ passName: `${pass.name} (Scene ${cIdx + 1})`, error: errMsg });
+        sp?.toast?.error?.(`Pass "${pass.name}" (Scene ${cIdx + 1}) failed: ${errMsg}`);
+        processedChunks.push(chunk);
+      }
+    }
+    if (passHasValidChunks) {
+      successfulPasses++;
+    }
+    currentText = reassembleChunks(processedChunks);
+    currentText = normalizeProtectionPlaceholders(currentText, protectedData.placeholders);
+    snapshots.push(restoreProtectedBlocks(currentText, protectedData));
   }
-  if (errors.length > 0 && errors.length === enabledPasses.length) {
+  if (successfulPasses === 0 && errors.length > 0) {
     throw new Error(`All passes failed. ${errors.map((e) => `[${e.passName}]: ${e.error}`).join("; ")}`);
   }
   const totalLatencyMs = Date.now() - tStart;
